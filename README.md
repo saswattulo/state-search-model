@@ -69,11 +69,13 @@ python train.py --help                # steps, lengths, lr, d-model, layers, dev
 | flag | choices | meaning |
 |---|---|---|
 | `--arch` | `mamba1` / `mamba2` | per-(channel, state) decay with a sequential scan / one decay per head with chunked SSD |
-| `--variant` | `pos` / `signed` / `split` | a ∈ (0,1) / `2·exp(−ΔA)−1` / `tanh(g)·exp(−ΔA)` |
+| `--variant` | `pos` / `signed` / `split` / `rotate` | a ∈ (0,1) / `2·exp(−ΔA)−1` / `tanh(g)·exp(−ΔA)` / `exp(−ΔA)·R(θ)`: Mamba-3-style unit-modulus rotations of state-dim pairs with a free angle θ (mamba2 only) |
 | `--init` | `naive` / `mamba` | dt bias 0 / Mamba-2 init (dt ~ logU[1e-3, 1e-1], A ~ U[1, 16]) |
 | `--out-norm` | `none` / `gated-rms` | mamba2 only: no norm / Mamba-2's `RMSNorm(y · silu(z))` before the output projection |
 
 `python sweep.py --preset outnorm` reruns the Mamba-2 half of `main` with `--out-norm gated-rms`.
+`python sweep.py --preset rotation` runs `rotate` (4 and 16 heads) and per-channel decay
+(`--heads 64`, head dim 1) for `signed` and `split`.
 
 Training uses lengths `--min-len`..`--max-len` (default 4–64). Evaluation reports final-position
 parity accuracy at each of `--eval-lens`; 0.5 is chance.
@@ -92,11 +94,11 @@ long L mostly measure loop overhead, not a GPU kernel.
 
 | file | contents |
 |---|---|
-| `signed_ssd.py` | reference scan, Mamba-2 chunked SSD, the gauge-transformed signed SSD |
+| `signed_ssd.py` | reference scans, Mamba-2 chunked SSD, signed SSD (sign gauge), rotary SSD (RoPE trick) |
 | `models.py` | Mamba-1-style and Mamba-2-style layers with the three decay variants |
 | `train.py` | train and evaluate one configuration; prints one JSON line |
 | `sweep.py` | parallel grid runner and summary table |
-| `test_signed_ssd.py` | correctness tests (forward, gradients, NaN check) |
+| `test_signed_ssd.py` | correctness tests (forward, gradients, NaN check, rotation-by-π = sign flip) |
 | `bench.py` | speed benchmarks |
 | `docs/explainer.html` | the write-up |
 

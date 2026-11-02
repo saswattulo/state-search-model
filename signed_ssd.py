@@ -73,3 +73,30 @@ def ssd_signed(x, a, B, C, chunk=64):
     s = (1 - 2 * (neg.cumsum(1) % 2)).to(x.dtype)                      # running sign, exact
     log_abs = torch.log(a.abs().clamp_min(torch.finfo(x.dtype).tiny))
     return ssd_positive(x * s[..., None], log_abs, B, C, chunk) * s[..., None]
+
+
+def rotate_pairs(v, angle):
+    """Rotate consecutive pairs of the last dim of v (..., n) by angle (..., n/2)."""
+    v0, v1 = v.unflatten(-1, (-1, 2)).unbind(-1)
+    c, s = angle.cos(), angle.sin()
+    return torch.stack([c * v0 - s * v1, s * v0 + c * v1], -1).flatten(-2)
+
+
+def sequential_scan_rotary(x, log_a, theta, B, C):
+    """Reference for h_t = a_t R(theta_t) h_{t-1} + x_t B_t^T, rotating pairs of state dims.
+    x (b,l,h,p), log_a (b,l,h), theta (b,l,h,n/2), B,C (b,l,h,n)."""
+    b, l, h, p = x.shape
+    st = x.new_zeros(b, h, p, B.shape[-1])
+    ys = []
+    for t in range(l):
+        st = log_a[:, t, :, None, None].exp() * rotate_pairs(st, theta[:, t, :, None, :])
+        st = st + x[:, t, :, :, None] * B[:, t, :, None, :]
+        ys.append((st * C[:, t, :, None, :]).sum(-1))
+    return torch.stack(ys, 1)
+
+
+def ssd_rotary(x, log_a, theta, B, C, chunk=64):
+    """Rotations with unit modulus through the positive SSD (Mamba-3's "RoPE trick"):
+    with phi_t = sum_{k<=t} theta_k, rotate B and C by -phi_t and keep the decay real and positive."""
+    phi = theta.cumsum(1)
+    return ssd_positive(x, log_a, rotate_pairs(B, -phi), rotate_pairs(C, -phi), chunk)

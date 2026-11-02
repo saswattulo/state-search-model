@@ -1,6 +1,7 @@
 """Correctness checks for the gauge-transformed SSD. Run: python test_signed_ssd.py  (or pytest)."""
 import torch
-from signed_ssd import sequential_scan, ssd_positive, ssd_signed
+import math
+from signed_ssd import sequential_scan, sequential_scan_rotary, ssd_positive, ssd_rotary, ssd_signed
 
 
 def make(b, l, h, p, n, dtype, seed=0):
@@ -41,6 +42,40 @@ def test_positive_case_unchanged():
 def test_stock_ssd_breaks_on_negative():
     x, a, B, C = make(1, 128, 2, 4, 8, torch.float32)
     assert torch.isnan(ssd_positive(x, torch.log(a), B, C)).any()
+
+
+def make_rotary(b, l, h, p, n, dtype, seed=0):
+    x, a, B, C = make(b, l, h, p, n, dtype, seed)
+    g = torch.Generator().manual_seed(seed + 1)
+    theta = (torch.rand(b, l, h, n // 2, generator=g, dtype=dtype) * 2 - 1) * math.pi
+    return x, a.abs().log(), theta, B, C
+
+
+def test_rotary_matches_loop():
+    x, la, th, B, C = make_rotary(2, 1000, 4, 8, 16, torch.float64)
+    ref = sequential_scan_rotary(x, la, th, B, C)
+    rel = ((ssd_rotary(x, la, th, B, C) - ref).norm() / ref.norm()).item()
+    assert rel < 1e-12, rel
+
+
+def test_rotary_gradients_match_loop():
+    x, la, th, B, C = make_rotary(1, 200, 2, 4, 8, torch.float64)
+    grads = []
+    for f in (sequential_scan_rotary, ssd_rotary):
+        xs = [t.clone().requires_grad_() for t in (x, la, th, B, C)]
+        f(*xs).pow(2).sum().backward()
+        grads.append([t.grad for t in xs])
+    for g1, g2 in zip(*grads):
+        assert (g1 - g2).abs().max().item() < 1e-10
+
+
+def test_rotation_by_pi_equals_sign_flip():
+    """theta = pi on every pair is a = -|a|, so ssd_rotary must agree with ssd_signed."""
+    x, la, th, B, C = make_rotary(2, 256, 4, 8, 16, torch.float64)
+    flip = torch.rand(la.shape, generator=torch.Generator().manual_seed(3)) < 0.5
+    th = (flip[..., None].to(la.dtype) * math.pi).expand_as(th)   # float64 pi; a float32 pi drifts
+    a = torch.where(flip, -la.exp(), la.exp())
+    assert torch.allclose(ssd_rotary(x, la, th, B, C), ssd_signed(x, a, B, C), atol=1e-10)
 
 
 if __name__ == "__main__":

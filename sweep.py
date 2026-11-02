@@ -11,7 +11,7 @@ import argparse, itertools, json, os, subprocess, sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-GB_PER_JOB = 1.3  # measured peak ~1.2 GB (16-head mamba2, eval at L=4096); most jobs need less
+GB_PER_JOB = 1.5  # measured peak ~1.46 GB (16-head mamba2 rotate, eval at L=4096); most jobs need less
 
 PRESETS = {
     # (arch, variant, init, heads) x seeds
@@ -27,6 +27,11 @@ PRESETS = {
         ("mamba2", "pos", "mamba", 4), ("mamba2", "signed", "mamba", 4), ("mamba2", "split", "mamba", 4),
         ("mamba2", "signed", "mamba", 16), ("mamba2", "split", "mamba", 16),
     ], seeds=[0, 1, 2], extra=["--out-norm", "gated-rms"]),
+    # unit-modulus rotations (Mamba-3 style), and one decay per channel (head dim 1)
+    "rotation": dict(grid=[
+        ("mamba2", "rotate", "mamba", 4), ("mamba2", "rotate", "mamba", 16),
+        ("mamba2", "signed", "mamba", 64), ("mamba2", "split", "mamba", 64),
+    ], seeds=[0, 1, 2], extra=[]),
 }
 # mamba1 uses a Python-loop scan, so evaluate it at shorter lengths to keep runtime sane
 MAMBA1_EXTRA = ["--max-len", "40", "--min-len", "4", "--eval-lens", "40,128,512"]
@@ -99,7 +104,8 @@ def main():
             continue
         cmd = [sys.executable, os.path.join(HERE, "train.py"), "--arch", arch, "--variant", variant,
                "--init", init, "--heads", str(heads), "--seed", str(seed), "--threads", "1",
-               "--out", args.out] + (MAMBA1_EXTRA if arch == "mamba1" else []) + p["extra"]
+               "--out", args.out] + (MAMBA1_EXTRA if arch == "mamba1" else []) + p["extra"] \
+              + (["--eval-micro", "8"] if heads >= 32 else [])   # many heads: smaller eval batches
         jobs.append(((arch, variant, init, heads, out_norm, seed), cmd))
     print(f"{len(jobs)} jobs to run ({len(done)} already done), {workers} in parallel "
           f"on {cores} cores / {free_gb:.1f} GB free RAM", flush=True)
