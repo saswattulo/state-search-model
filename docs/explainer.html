@@ -1,0 +1,323 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>State Space Models, Down to the Scan</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,500;7..72,700&family=Public+Sans:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one reading column (~68ch) with full-bleed figure rows; math set as mono "equation slabs". */
+:root {
+  --bg: #f3f5f7; --surface: #ffffff; --fg: #17212b; --muted: #56636f; --rule: #d5dce3;
+  --accent: #0b6e69; --warm: #b35a12; --accent-soft: #dcefed; --warm-soft: #f7e6d6;
+  --good: #1d7a3a; --bad: #b3261e;
+  --f-display: "Literata", Georgia, serif;
+  --f-body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11171d; --surface: #182129; --fg: #e3e9ee; --muted: #9aa8b4; --rule: #2b3843;
+  --accent: #4fc3b9; --warm: #f0a35e; --accent-soft: #173a38; --warm-soft: #3b2a1a;
+  --good: #6ccf8a; --bad: #ff8a80; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #11171d; --surface: #182129; --fg: #e3e9ee; --muted: #9aa8b4; --rule: #2b3843;
+  --accent: #4fc3b9; --warm: #f0a35e; --accent-soft: #173a38; --warm-soft: #3b2a1a;
+  --good: #6ccf8a; --bad: #ff8a80; color-scheme: dark }
+
+body { background: var(--bg); color: var(--fg); font: 400 1.0625rem/1.65 var(--f-body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 2.5rem 5rem; }
+main { max-width: 46rem; margin: 0 auto; display: flex; flex-direction: column; gap: 1rem; }
+main > * { min-width: 0; }
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; line-height: 1.2; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 2.9rem); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.6rem; font-weight: 700; margin-top: 2.2rem; padding-top: 1.4rem; border-top: 1px solid var(--rule); }
+h3 { font-size: 1.15rem; font-weight: 700; margin-top: 0.8rem; }
+p, ul, ol { margin: 0; }
+ul, ol { padding-left: 1.3rem; display: flex; flex-direction: column; gap: 0.35rem; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.eyebrow { font: 600 0.75rem/1 var(--f-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); }
+.lede { font-size: 1.2rem; color: var(--muted); }
+code, .m { font-family: var(--f-mono); font-size: 0.9em; }
+.eq { font-family: var(--f-mono); font-size: 0.95rem; background: var(--surface); border: 1px solid var(--rule);
+  border-radius: 6px; padding: 0.9rem 1.1rem; overflow-x: auto; white-space: pre; line-height: 1.7; }
+.eq .c { color: var(--muted); }
+.note { color: var(--muted); font-size: 0.95rem; }
+.toc { display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; font-size: 0.92rem; }
+.callout { border-left: 3px solid var(--warm); background: var(--warm-soft); padding: 0.9rem 1.1rem; border-radius: 0 6px 6px 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.views { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.8rem; }
+.view { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.95rem; }
+.view b { font-family: var(--f-display); font-size: 1.05rem; }
+.tbl { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+th, td { text-align: left; padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { font: 600 0.72rem/1.2 var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+td.n { font-family: var(--f-mono); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.pass { color: var(--good); font-weight: 600; } .fail { color: var(--bad); font-weight: 600; }
+
+/* playground */
+.lab { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 1rem; display: flex; flex-direction: column; gap: 0.8rem; }
+.bits { display: flex; flex-wrap: wrap; gap: 4px; }
+.bits button { width: 2rem; height: 2rem; font: 600 0.9rem var(--f-mono); border: 1px solid var(--rule); background: var(--bg); color: var(--fg); border-radius: 4px; cursor: pointer; }
+.bits button[data-v="1"] { background: var(--fg); color: var(--bg); }
+.controls { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; font-size: 0.9rem; }
+.controls button { font: 600 0.82rem var(--f-body); padding: 0.4rem 0.75rem; border-radius: 4px; border: 1px solid var(--rule); background: var(--bg); color: var(--fg); cursor: pointer; }
+.controls button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.controls label { display: flex; gap: 0.4rem; align-items: center; }
+.plot { width: 100%; height: auto; display: block; }
+.readout { font: 0.85rem/1.5 var(--f-mono); color: var(--muted); }
+.legend { display: flex; gap: 1rem; flex-wrap: wrap; font: 0.8rem var(--f-mono); color: var(--muted); }
+.sw { display: inline-block; width: 0.8rem; height: 0.2rem; vertical-align: middle; margin-right: 0.35rem; }
+.timeline { display: flex; flex-direction: column; gap: 0.5rem; }
+.timeline div { display: grid; grid-template-columns: 4.2rem 1fr; gap: 0.8rem; font-size: 0.95rem; }
+.timeline span:first-child { font: 600 0.85rem var(--f-mono); color: var(--accent); padding-top: 0.15rem; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<main>
+  <span class="eyebrow">Sequence models · Deep dive + experiment</span>
+  <h1>State Space Models, down to the scan</h1>
+  <p class="lede">What an SSM is, why S4 and Mamba work, where SSMs are used, and a structural flaw in the standard Mamba parameterisation. I reproduce the flaw, fix it with a one-line change, and then make the fix run on Mamba-2's fast chunked algorithm, which the original authors left as future work.</p>
+  <nav class="toc" aria-label="Sections">
+    <a href="#core">1. The core equations</a><a href="#views">2. Three views</a><a href="#lineage">3. HiPPO → Mamba-3</a>
+    <a href="#mamba">4. Selection &amp; the scan</a><a href="#apps">5. Applications</a><a href="#limits">6. Known limits</a>
+    <a href="#lab">7. Playground</a><a href="#exp">8. Experiment</a><a href="#signed">9. Signed SSD</a><a href="#next">10. Next steps</a><a href="#sources">Sources</a>
+  </nav>
+
+  <h2 id="core">1. The core equations</h2>
+  <p>A state space model maps an input signal <span class="m">u(t)</span> to an output <span class="m">y(t)</span> through a hidden state <span class="m">x(t)</span> of size N. The idea comes from control theory (Kalman, 1960). Deep-learning SSMs keep the same equations and learn the matrices.</p>
+  <div class="eq">x'(t) = A x(t) + B u(t)        <span class="c"># state evolves linearly; A is N×N</span>
+y(t)  = C x(t) + D u(t)        <span class="c"># readout + skip connection</span></div>
+  <p>Neural networks see tokens, not continuous time, so the system is discretised with a step size Δ. Zero-order hold (assume u is constant during each step) gives:</p>
+  <div class="eq">Ā = exp(ΔA)
+B̄ = (ΔA)⁻¹ (exp(ΔA) − I) · ΔB      <span class="c"># Mamba simplifies this to B̄ ≈ ΔB</span>
+
+h_t = Ā h_{t−1} + B̄ u_t
+y_t = C h_t + D u_t</div>
+  <p>Δ matters more than it looks. A small Δ makes Ā ≈ I, so the state holds on to the past and mostly ignores the current input. A large Δ makes Ā ≈ 0, so the state resets and takes in the current token. Selective SSMs work by learning to set Δ per token.</p>
+  <p>Stability needs the eigenvalues of A to have negative real part, so the eigenvalues of Ā lie inside the unit circle. Almost every modern SSM keeps A diagonal and negative real: <span class="m">A = −exp(A_log)</span>. That means each eigenvalue of Ā is a number in <span class="m">(0, 1)</span>. Section 8 shows why this is a problem.</p>
+
+  <h2 id="views">2. One model, three views</h2>
+  <p>If A, B, C and Δ do not depend on the input (a <em>linear time-invariant</em>, or LTI, system), the same model can be computed in three equivalent ways. S4's main trick is switching between them.</p>
+  <div class="views">
+    <div class="view"><b>Recurrent</b><span>Step <span class="m">h_t = Āh_{t−1} + B̄u_t</span>. O(1) memory and compute per token. Used for <em>inference</em>, with no KV cache that grows with context.</span></div>
+    <div class="view"><b>Convolutional</b><span>Unroll the recurrence: <span class="m">y = K * u</span> with kernel <span class="m">K = (CB̄, CĀB̄, CĀ²B̄, …)</span>. Computed with an FFT in O(L log L). Used for parallel <em>training</em>.</span></div>
+    <div class="view"><b>Continuous</b><span>The model is defined on <span class="m">t</span>, not on token index. Changing Δ resamples it, so a model trained at 16 kHz can run at 8 kHz.</span></div>
+  </div>
+  <div class="eq"><span class="c"># proof of the convolution view (h_{−1} = 0)</span>
+h_0 = B̄u_0
+h_1 = ĀB̄u_0 + B̄u_1
+h_2 = Ā²B̄u_0 + ĀB̄u_1 + B̄u_2
+y_k = Σ_j  C Ā^{k−j} B̄ · u_j  =  (K * u)_k</div>
+
+  <h2 id="lineage">3. Lineage: from HiPPO to Mamba-3</h2>
+  <div class="timeline">
+    <div><span>2020</span><p><b>HiPPO.</b> Asks which A makes the state an optimal running compression of the whole history. Projecting onto Legendre polynomials gives a specific A matrix, and initialising with it fixes the forgetting problem of random linear RNNs.</p></div>
+    <div><span>2021</span><p><b>S4.</b> HiPPO A as a diagonal-plus-low-rank (DPLR) matrix, with a Cauchy-kernel algorithm to compute the convolution kernel quickly. First model to solve Path-X (sequence length 16k) in Long Range Arena.</p></div>
+    <div><span>2022</span><p><b>DSS / S4D / S5.</b> A purely diagonal A works about as well as DPLR. S5 uses one multi-input multi-output SSM and a <em>parallel scan</em> instead of a convolution, which later makes Mamba possible.</p></div>
+    <div><span>2023</span><p><b>H3, Hyena, RetNet, RWKV.</b> Attempts to match attention on language. LTI models struggle with <em>associative recall</em> (the Zoology/MQAR results), because a fixed kernel cannot decide what to keep based on content.</p></div>
+    <div><span>Dec 2023</span><p><b>Mamba (S6).</b> Makes Δ, B and C functions of the input. The model stops being LTI, so the convolution view is gone. A fused, hardware-aware parallel scan on GPUs replaces it. Matches Transformers of the same size on language up to a few billion parameters.</p></div>
+    <div><span>2024</span><p><b>Mamba-2 (SSD).</b> Restricts A to a scalar times the identity. The layer then equals a masked linear attention, <span class="m">y = (L ∘ CBᵀ) x</span>, and can be trained with matrix multiplies on tensor cores. 2–8× faster training. Hybrids follow: Jamba, Zamba, Samba, NVIDIA's Mamba-2-Hybrid, and later Nemotron-H and Falcon-H1.</p></div>
+    <div><span>2024–25</span><p><b>Expressivity results.</b> <i>The Illusion of State</i> (Merrill et al.) shows SSMs with the usual parameterisation sit in the same circuit class (TC⁰) as Transformers, so they cannot track state in general. Grazzi et al. (ICLR 2025) show that eigenvalues restricted to [0,1] cannot solve parity, and that allowing [−1,1] fixes it. A 2025 follow-up shows that stacking LTI layers with non-negative selective layers does not help: one layer must be both input-dependent and allow negative eigenvalues. Gated DeltaNet and DeltaProduct add non-diagonal (Householder) transitions.</p></div>
+    <div><span>2026</span><p><b>Mamba-3</b> (arXiv, March 2026). Exponential-trapezoidal discretisation, complex-valued (rotational) state updates for state tracking, and a MIMO formulation that raises arithmetic intensity during decoding. All three aim at the expressivity and hardware-efficiency gaps above.</p></div>
+  </div>
+
+  <h2 id="mamba">4. Selection and the parallel scan</h2>
+  <p>Mamba's change is small to write and large in effect. For each token, a linear projection of the input produces the SSM parameters:</p>
+  <div class="eq">Δ_t = softplus(W_Δ u_t + b)          <span class="c"># per channel: how much to write vs. keep</span>
+B_t = W_B u_t,  C_t = W_C u_t        <span class="c"># what to write into the state, what to read out</span>
+ā_t = exp(Δ_t · A)                     <span class="c"># A = −exp(A_log): ā_t ∈ (0,1)</span>
+h_t = ā_t ⊙ h_{t−1} + Δ_t B_t u_t
+y_t = C_tᵀ h_t + D u_t</div>
+  <p>The model can now ignore a filler token (Δ → 0, the state passes through unchanged) or reset on a delimiter (Δ large, the state is overwritten). An LTI model cannot do either.</p>
+  <p>There is no fixed kernel anymore, so how does training run in parallel? The recurrence <span class="m">h_t = a_t h_{t−1} + b_t</span> is a composition of affine maps, and composing affine maps is associative:</p>
+  <div class="eq">(a₁, b₁) • (a₂, b₂) = (a₁·a₂,  a₂·b₁ + b₂)</div>
+  <p>An associative operator can be computed with a Blelloch prefix scan in O(log L) parallel steps. Mamba's CUDA kernel does this in SRAM and never writes the expanded <span class="m">(B, L, D, N)</span> state tensor to HBM. Note that associativity holds for <em>any</em> real a_t, including negative values. That fact matters in sections 8 and 9.</p>
+  <p>Mamba-2 goes further. Unroll the recurrence and the output is a matrix product with a lower-triangular <em>1-semiseparable</em> mask:</p>
+  <div class="eq">y = M x,    M_ij = C_iᵀ B_j · (a_{j+1} · a_{j+2} ⋯ a_i)    for i ≥ j
+             = (L ∘ C Bᵀ) x                                    <span class="c"># L_ij = Π a  → "linear attention with decay"</span></div>
+  <p>This is the <em>state space duality</em>. Attention computes <span class="m">softmax(QKᵀ)V</span>. An SSM computes a structured mask times <span class="m">CBᵀ</span> times x, where C plays the role of Q and B plays the role of K. In practice Mamba-2 computes <span class="m">log L_ij</span> as a segment sum of <span class="m">log a_t</span>, which only works if every a_t is positive.</p>
+
+  <h2 id="apps">5. Where SSMs are used</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Domain</th><th>Examples</th><th>Why an SSM</th></tr></thead>
+    <tbody>
+      <tr><td>Classical control &amp; estimation</td><td>Kalman filters for GPS/IMU fusion, radar tracking, robotics, econometric state-space and structural time-series models</td><td>Explicit dynamics, uncertainty propagation, the original use</td></tr>
+      <tr><td>Language models</td><td>Mamba, Falcon Mamba 7B, Codestral Mamba; hybrids such as Jamba, Zamba, Samba, Nemotron-H, Falcon-H1</td><td>Constant memory at inference, high throughput on long contexts</td></tr>
+      <tr><td>Genomics</td><td>HyenaDNA, Caduceus (bidirectional, reverse-complement-equivariant Mamba)</td><td>Million-length DNA at single-nucleotide resolution, where attention's L² cost is prohibitive</td></tr>
+      <tr><td>Audio &amp; speech</td><td>SaShiMi (raw waveform generation), SSM-based ASR and TTS encoders</td><td>Tens of thousands of samples per second; the continuous view handles sampling-rate changes</td></tr>
+      <tr><td>Vision &amp; video</td><td>Vision Mamba (Vim), VMamba, VideoMamba, medical segmentation (U-Mamba)</td><td>Linear cost in pixel and frame count for high-resolution or long video</td></tr>
+      <tr><td>Time series &amp; signals</td><td>Forecasting, EEG/ECG classification, sensor anomaly detection</td><td>Irregular sampling, long horizons, streaming</td></tr>
+      <tr><td>Reinforcement learning</td><td>S4/S5-based world models and memory policies</td><td>Fast recurrent rollout with long memory</td></tr>
+      <tr><td>Edge &amp; streaming</td><td>On-device assistants, real-time transcription</td><td>Fixed-size state: memory does not grow with conversation length</td></tr>
+    </tbody>
+  </table></div>
+
+  <h2 id="limits">6. Known limits of current SSMs</h2>
+  <ol>
+    <li><b>Fixed-size memory.</b> All history is compressed into N·D numbers. Copying a long string or retrieving a phone number from 100k tokens back fails once the information exceeds that state (Jelassi et al., <i>Repeat After Me</i>, 2024). Transformers keep every token in the KV cache. This is the main reason production models are <em>hybrids</em> with a few attention layers.</li>
+    <li><b>State tracking.</b> Tasks like parity, permutation composition, or following code variables through reassignments need the state to <em>rotate or flip</em>, not just decay. With real diagonal ā_t ∈ (0,1), each channel can only shrink toward zero and add. Sections 7–8 show this directly.</li>
+    <li><b>Length generalisation.</b> Δ and the effective memory horizon are learned at training lengths. Beyond them, models often degrade (cf. LongMamba, DeciMamba).</li>
+    <li><b>Hardware fit.</b> Scans are memory-bound, while GPUs are built for matrix multiplies. Mamba-2's SSD and chunked kernels close most of this gap, at the cost of the restrictions above (scalar A, positive decay).</li>
+  </ol>
+
+  <h2 id="lab">7. Playground: why (0, 1) cannot count</h2>
+  <p>This is one channel of a selective SSM solving parity, the simplest state-tracking task. The state starts at h = 1. Each bit selects a decay ā: bit 0 gives ā = 1 (keep), bit 1 gives whatever value the model can produce. Click the bits to flip them.</p>
+  <div class="lab">
+    <div class="bits" id="bits" aria-label="Input bits"></div>
+    <div class="controls">
+      <span>Bit-1 decay range:</span>
+      <button id="mStd" aria-pressed="true">Standard  ā ∈ (0, 1)</button>
+      <button id="mNeg" aria-pressed="false">Negative  ā ∈ (−1, 1)</button>
+      <label for="aval">ā for bit 1 = <span class="m" id="aOut"></span><input id="aval" type="range" min="0" max="1" step="0.01" value="0.5"></label>
+      <button id="rand">Random bits</button>
+    </div>
+    <svg class="plot" id="plot" viewBox="0 0 640 220" role="img" aria-label="State h over time"></svg>
+    <div class="legend"><span><span class="sw" style="background:var(--accent)"></span>state h_t</span><span><span class="sw" style="background:var(--warm)"></span>true parity (+1 even, −1 odd)</span></div>
+    <p class="readout" id="read"></p>
+  </div>
+  <p>In standard mode the state stays positive and only shrinks: after k ones it equals ā^k. Odd and even counts interleave on that single decreasing scale (ā¹ &gt; ā² &gt; ā³ …), so no fixed threshold separates them. The output layer would have to read parity from the exact <em>magnitude</em> ā^k. That works for small k but the levels collapse below float resolution as k grows. In negative mode ā = −1 makes h = (−1)^k exactly: one sign bit, correct at any length. Real Mamba also mixes channels with nonlinearities between layers. Grazzi et al. prove that a finite-precision linear RNN with only non-negative eigenvalues still cannot solve parity at arbitrary length. That is the result tested below.</p>
+
+  <h2 id="exp">8. Experiment: fixing Mamba's eigenvalue range</h2>
+  <p>I implemented a 2-layer Mamba-style selective SSM in PyTorch (d_model 32, expand 2, state size 8, gated output, pre-LayerNorm residual) and trained it to output the running parity of a bit string. The two variants differ in <strong>one line</strong>:</p>
+  <div class="eq">a = torch.exp(-dt[..., None] * self.A_log.exp())   <span class="c"># standard Mamba: a ∈ (0,1)</span>
+if self.neg:
+    a = 2 * a - 1                                   <span class="c"># fixed: a ∈ (−1,1), same parameters, same init</span></div>
+  <p>Training: 1,500 AdamW steps, batch 64, lengths drawn uniformly from 3 to 40, loss on every position. Test: accuracy of the parity of the <em>whole</em> sequence on 256 fresh sequences at length 40 (in distribution), 128 and 512 (3× and 13× longer than any training sequence). Chance is 0.5. Three seeds each, CPU only.</p>
+  <div class="tbl"><table id="results">
+    <thead><tr><th>Variant</th><th>Seed</th><th style="text-align:right">L = 40</th><th style="text-align:right">L = 128</th><th style="text-align:right">L = 512</th></tr></thead>
+    <tbody>
+      <tr><td>Standard Mamba, a ∈ (0,1)</td><td class="n">0</td><td class="n fail">0.523</td><td class="n fail">0.504</td><td class="n fail">0.523</td></tr>
+      <tr><td>Standard Mamba, a ∈ (0,1)</td><td class="n">1</td><td class="n fail">0.570</td><td class="n fail">0.512</td><td class="n fail">0.551</td></tr>
+      <tr><td>Standard Mamba, a ∈ (0,1)</td><td class="n">2</td><td class="n fail">0.516</td><td class="n fail">0.523</td><td class="n fail">0.488</td></tr>
+      <tr><td>Fixed, a ∈ (−1,1)</td><td class="n">0</td><td class="n pass">1.000</td><td class="n pass">1.000</td><td class="n pass">1.000</td></tr>
+      <tr><td>Fixed, a ∈ (−1,1)</td><td class="n">1</td><td class="n pass">1.000</td><td class="n pass">1.000</td><td class="n pass">1.000</td></tr>
+      <tr><td>Fixed, a ∈ (−1,1)</td><td class="n">2</td><td class="n pass">1.000</td><td class="n pass">1.000</td><td class="n pass">1.000</td></tr>
+    </tbody>
+  </table></div>
+  <p>The result is clear-cut. The standard model stays at chance (0.49–0.57) <em>even on lengths it was trained on</em>. The flipped-sign version is perfect on every seed, including sequences 13× longer than any it saw. This matches Grazzi et al.'s Table 3 (Mamba [0,1]: 0.000 vs [−1,1]: 1.000 on their normalised scale) with a 24.5k-parameter model trained on one CPU core in about 5 minutes per run.</p>
+
+  <h3>What the fix costs</h3>
+  <ul>
+    <li><b>Parameters and FLOPs:</b> none. It is an affine remap of a value the layer already computes.</li>
+    <li><b>Parallel scan:</b> still valid, because the affine-composition operator is associative for any real a_t.</li>
+    <li><b>Kernels:</b> this was the real cost. Mamba-2/SSD computes decay products as <span class="m">exp(cumsum(log a))</span>, which returns NaN for a &lt; 0. Grazzi et al. name this as a limitation: they patched Mamba-1's CUDA scan by hand and left log-space models to future work. Section 9 removes the problem without touching the kernel.</li>
+    <li><b>Language modelling:</b> mixed. In Grazzi et al.'s 370M-parameter runs, the [−1,1] Mamba trained stably but had slightly worse perplexity (Wikitext 24.84 → 25.02) and worse perplexity on code and math. The gains are concentrated in state-tracking tasks. It also does nothing for recall-heavy tasks; that is limit 1 above, a separate problem.</li>
+    <li><b>What it does not fix:</b> diagonal transitions with negative entries can represent abelian, sign-flip structure (parity, modular counting by 2). Non-abelian tasks such as composing permutations of 5 elements still need non-diagonal transitions: products of Householder reflections (DeltaProduct) or the complex rotations of Mamba-3.</li>
+  </ul>
+
+  <h2 id="signed">9. Signed SSD: the fix at Mamba-2 speed</h2>
+  <p>Mamba-2 trains fast because its chunked SSD algorithm turns the scan into matrix multiplies. It builds the decay mask as <span class="m">exp(segsum(log a))</span>. A negative a has no real logarithm, so feeding the fix from section 8 into the stock algorithm gives <strong>NaN in 100% of outputs</strong> (tested below). Grazzi et al. list this as a limitation and leave it to future work. Combining three facts already on this page removes the problem.</p>
+  <div class="callout">
+    <b>Gauge lemma.</b>
+    <span>Let <span class="m">s_t = sign(a_1)·sign(a_2)⋯sign(a_t) ∈ {+1, −1}</span> and define the re-signed state <span class="m">h̃_t = s_t h_t</span>. Since <span class="m">s_t a_t = |a_t| s_{t−1}</span>:</span>
+    <div class="eq">h̃_t = |a_t| · h̃_{t−1} + (s_t x_t) B_tᵀ          <span class="c"># an ordinary positive-decay SSM</span>
+y_t = s_t · (h̃_t C_t)
+
+⇒  SSD_signed(a, x) = s ⊙ SSD_positive(|a|, s ⊙ x)</div>
+    <span>In the matrix view of section 4, the signed semiseparable mask factorises as <span class="m">L_signed = diag(s) · L_|a| · diag(s)</span>, because the sign of a product over a segment is <span class="m">s_i s_j</span>. Every existing positive-only kernel (Mamba-2 Triton, CUDA Tile, chunked FLA kernels) can run negative eigenvalues <em>unchanged</em>, with one cumulative sum before and two sign flips around it.</span>
+  </div>
+  <div class="eq">def ssd_signed(x, a, B, C, chunk=64):
+    neg = (a &lt; 0).long()
+    s = 1 - 2 * (neg.cumsum(1) % 2)                    <span class="c"># running sign, exact integers</span>
+    log_abs = torch.log(a.abs().clamp_min(tiny))
+    return s[..., None] * ssd_positive(x * s[..., None], log_abs, B, C, chunk)</div>
+  <h3>Verification</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Check</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Output vs. sequential scan, L = 1024, half the decays negative, float64</td><td class="n pass">rel. error 5.2e−16</td></tr>
+      <tr><td>Same, float32</td><td class="n pass">rel. error 2.2e−7</td></tr>
+      <tr><td>Gradients w.r.t. x, a, B, C vs. sequential scan (float64)</td><td class="n pass">max diff ≤ 5.7e−14</td></tr>
+      <tr><td>Stock positive-only SSD fed the same negative a</td><td class="n fail">100% NaN</td></tr>
+      <tr><td>Overhead vs. stock positive SSD (fwd+bwd, L = 1k–16k, CPU)</td><td class="n">not measurable</td></tr>
+    </tbody>
+  </table></div>
+  <p class="note">On overhead: the extra work is O(L·heads) for the sign cumsum plus O(L·heads·P) for two multiplies, against O(L·Q·(N+P)) for the SSD matrix multiplies. In interleaved timing the signed path was never slower; it was 6–23% faster, which I can't explain and treat as measurement artefact.</p>
+  <h3>Training speed vs. the sequential scan</h3>
+  <p>A training step (forward + backward) on CPU with batch 4, 8 heads, head dim 32, state 16. The loop is PyTorch autograd over the recurrence, so the largest ratios mostly reflect autograd overhead per step. On GPU the relevant comparison is against Mamba-2's own kernel, which this approach reuses without changes.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Sequence length</th><th style="text-align:right">Sequential loop</th><th style="text-align:right">Signed SSD</th><th style="text-align:right">Speedup</th></tr></thead>
+    <tbody>
+      <tr><td>512</td><td class="n">0.71 s</td><td class="n">0.044 s</td><td class="n pass">16×</td></tr>
+      <tr><td>2,048</td><td class="n">8.0 s</td><td class="n">0.14 s</td><td class="n pass">57×</td></tr>
+      <tr><td>8,192</td><td class="n">276 s</td><td class="n">0.48 s</td><td class="n pass">576×</td></tr>
+    </tbody>
+  </table></div>
+  <h3>End to end: a Mamba-2-style model on parity</h3>
+  <p>The same parity task, now with Mamba-2-style layers: one scalar decay per head, 4 heads, training on lengths 16–64, all computed through the chunked SSD path. The positive model uses stock SSD; the signed model uses the gauge transform.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Variant (3 seeds each)</th><th style="text-align:right">L = 64</th><th style="text-align:right">L = 256</th><th style="text-align:right">L = 1024</th><th style="text-align:right">L = 4096</th></tr></thead>
+    <tbody>
+      <tr><td>Positive (0,1), Mamba-2 init</td><td class="n fail">0.48–0.52</td><td class="n fail">0.48–0.54</td><td class="n fail">0.45–0.49</td><td class="n fail">0.50–0.52</td></tr>
+      <tr><td>Signed (−1,1), naive init (dt ≈ 0.69)</td><td class="n pass">1.000 ×3</td><td class="n fail">0.51–0.53</td><td class="n fail">0.48–0.55</td><td class="n fail">0.46–0.53</td></tr>
+      <tr><td>Signed (−1,1), Mamba-2 init</td><td class="n pass">1.000 ×3</td><td class="n">1.000, 1.000, 0.508</td><td class="n fail">0.47–0.52</td><td class="n fail">0.50–0.51</td></tr>
+    </tbody>
+  </table></div>
+  <p>The signed SSD model learns parity every time; the positive one never does, even in distribution. Length generalisation is weaker than in section 8: the best runs hold to 4× training length and then fail. My working hypothesis is that with only one decay per head, the learned |a| for "keep" and "flip" tokens ends up close to 1 but not equal to it, so the state magnitude drifts over thousands of steps. The section 8 model has 512 independent decays per layer and more chances to land one exactly on ±1. A 16-head run reached 0.78 at L = 256, which is not enough evidence either way. This is the main open question from this work.</p>
+
+  <h2 id="next">10. What to build next</h2>
+  <ol>
+    <li><b>Drop the gauge into a real GPU kernel.</b> Wrap <span class="m">mamba_chunk_scan_combined</span> from <span class="m">mamba_ssm</span> with the three lines above and train a 130M–370M model with <span class="m">a = 2·exp(Δ·A) − 1</span>. This tests the fix at scale at Mamba-2 speed, which Grazzi et al. could not do.</li>
+    <li><b>Make |a| = 1 reachable.</b> Parameterise sign and magnitude separately (for example, magnitude in log-space pinned near 0, sign from a separate gate) so a "flip" can be exactly −1 without Δ → ∞. This targets the extrapolation gap above.</li>
+    <li><b>Hybrid for recall.</b> Roughly one attention layer per 6–8 signed-SSD layers handles retrieval, which fixed-size state cannot. Test MQAR (recall) and S5 permutation or modular arithmetic (state tracking) on the same model.</li>
+    <li><b>Beyond abelian.</b> Sign flips cover parity-like structure. Composing permutations needs rotations or Householder products (Mamba-3, DeltaProduct). The gauge idea extends to any transition group with a cheap prefix product, which is worth working out for complex phases.</li>
+  </ol>
+  <p class="note">Code: <span class="m">ssm_parity.py</span> (section 8), <span class="m">signed_ssd.py</span> (gauge lemma, tests, benchmarks), <span class="m">parity_ssd.py</span> (Mamba-2-style end-to-end run). The sequential scans are Python loops for clarity, not speed. I did not find this gauge construction in the papers I checked, but it is a short derivation and may exist elsewhere.</p>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="note">
+    <li>Grazzi, Siems et al., <a href="https://arxiv.org/abs/2411.12537">Unlocking State-Tracking in Linear RNNs Through Negative Eigenvalues</a>, ICLR 2025</li>
+    <li><a href="https://arxiv.org/abs/2508.07395">Parity Requires Unified Input Dependence and Negative Eigenvalues in SSMs</a>, 2025</li>
+    <li><a href="https://arxiv.org/abs/2603.15569">Mamba-3: Improved Sequence Modeling using State Space Principles</a>, 2026</li>
+    <li>Gu &amp; Dao, <a href="https://arxiv.org/abs/2312.00752">Mamba: Linear-Time Sequence Modeling with Selective State Spaces</a>, 2023</li>
+    <li>Dao &amp; Gu, <a href="https://arxiv.org/abs/2405.21060">Transformers are SSMs (Mamba-2 / SSD)</a>, 2024</li>
+    <li>Gu, Goel, Ré, <a href="https://arxiv.org/abs/2111.00396">Efficiently Modeling Long Sequences with Structured State Spaces (S4)</a>, 2021</li>
+    <li>Gu et al., <a href="https://arxiv.org/abs/2008.07669">HiPPO: Recurrent Memory with Optimal Polynomial Projections</a>, 2020</li>
+    <li>Merrill, Petty, Sabharwal, <a href="https://arxiv.org/abs/2404.08819">The Illusion of State in State-Space Models</a>, 2024</li>
+    <li>Jelassi et al., <a href="https://arxiv.org/abs/2402.01032">Repeat After Me: Transformers are Better than State Space Models at Copying</a>, 2024</li>
+  </ul>
+</main>
+
+<script>
+(function(){
+  const N = 24;
+  let bits = [1,0,1,1,0,0,1,0,1,1,1,0,0,1,0,1,0,0,1,1,0,1,0,1];
+  let neg = false, aMag = 0.5;
+  const $ = id => document.getElementById(id);
+  const svg = $("plot"), bitsEl = $("bits"), slider = $("aval");
+  function setMode(n){
+    neg = n; $("mStd").setAttribute("aria-pressed", String(!n)); $("mNeg").setAttribute("aria-pressed", String(n));
+    slider.min = n ? "-1" : "0"; slider.max = "1";
+    if (n && aMag >= 0) aMag = -1; if (!n && aMag < 0) aMag = 0.5;
+    slider.value = String(aMag); draw();
+  }
+  function draw(){
+    bitsEl.innerHTML = "";
+    bits.forEach((b,i)=>{ const btn=document.createElement("button"); btn.textContent=b; btn.dataset.v=b;
+      btn.setAttribute("aria-label",`bit ${i+1} is ${b}, click to flip`);
+      btn.onclick=()=>{ bits[i]=1-bits[i]; draw(); }; bitsEl.appendChild(btn); });
+    $("aOut").textContent = aMag.toFixed(2);
+    let h = 1, hs = [1], par = [1], k = 0;
+    bits.forEach(b=>{ if(b){ h*=aMag; k++; } hs.push(h); par.push(k%2?-1:1); });
+    const W=640,H=220,L=40,R=12,T=14,B=26, xs=i=>L+(W-L-R)*i/N, ys=v=>T+(H-T-B)*(1-v)/2;
+    const css = getComputedStyle(document.documentElement);
+    let s = "";
+    [-1,0,1].forEach(v=>{ s+=`<line x1="${L}" x2="${W-R}" y1="${ys(v)}" y2="${ys(v)}" stroke="var(--rule)" stroke-width="1"/>`;
+      s+=`<text x="${L-8}" y="${ys(v)+4}" text-anchor="end" font-size="11" font-family="JetBrains Mono, monospace" fill="var(--muted)">${v>0?"+1":v}</text>`; });
+    [0,8,16,24].forEach(i=>{ s+=`<text x="${xs(i)}" y="${H-8}" text-anchor="middle" font-size="11" font-family="JetBrains Mono, monospace" fill="var(--muted)">t=${i}</text>`; });
+    const path = arr => arr.map((v,i)=>`${i?"L":"M"}${xs(i).toFixed(1)},${ys(v).toFixed(1)}`).join("");
+    s+=`<path d="${path(par)}" fill="none" stroke="var(--warm)" stroke-width="2" stroke-dasharray="5 4"/>`;
+    s+=`<path d="${path(hs)}" fill="none" stroke="var(--accent)" stroke-width="2.5"/>`;
+    hs.forEach((v,i)=>{ s+=`<circle cx="${xs(i)}" cy="${ys(v)}" r="3" fill="var(--accent)"/>`; });
+    svg.innerHTML = s;
+    const ok = hs.every((v,i)=> Math.sign(v)===par[i]);
+    $("read").textContent = `ones seen: ${k}  ·  final h = ${h.toExponential(2)}  ·  sign(h) matches parity at every step: ${ok ? "yes" : "no"}`;
+  }
+  slider.addEventListener("input", ()=>{ aMag = parseFloat(slider.value); draw(); });
+  $("mStd").onclick = ()=>setMode(false); $("mNeg").onclick = ()=>setMode(true);
+  $("rand").onclick = ()=>{ bits = bits.map(()=>Math.random()<0.5?1:0); draw(); };
+  setMode(false);
+})();
+</script>
+
+</body></html>
