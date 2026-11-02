@@ -68,12 +68,25 @@ class Mamba1Layer(nn.Module):
         return x + self.out_proj(y * F.silu(z))
 
 
+class GatedRMSNorm(nn.Module):
+    """Mamba-2's output norm (norm_before_gate=False): RMSNorm(y * silu(z)) over the full inner dim."""
+    def __init__(self, dim, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, y, z):
+        y = y * F.silu(z)
+        return y * torch.rsqrt(y.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
+
+
 class Mamba2Layer(nn.Module):
-    def __init__(self, d, variant, init, heads=4, headdim=16, d_state=16, chunk=16):
+    def __init__(self, d, variant, init, heads=4, headdim=16, d_state=16, chunk=16, out_norm="none"):
         super().__init__()
         self.variant, self.h, self.p, self.n, self.chunk = variant, heads, headdim, d_state, chunk
         di = heads * headdim
         self.norm = nn.LayerNorm(d)
+        self.out_norm = GatedRMSNorm(di) if out_norm == "gated-rms" else None
         self.extra = heads if variant == "split" else 0
         self.in_proj = nn.Linear(d, 2 * di + 2 * d_state + heads + self.extra)
         self.A_log = nn.Parameter(torch.zeros(heads))
@@ -101,17 +114,19 @@ class Mamba2Layer(nn.Module):
         else:
             y = ssd_signed(xdt, decay(log_mag, gate, self.variant), B, C, self.chunk)
         y = (y + x * self.D[:, None]).reshape(b, l, -1)
+        if self.out_norm is not None:
+            return u + self.out_proj(self.out_norm(y, z))
         return u + self.out_proj(y * F.silu(z))
 
 
 class ParityModel(nn.Module):
-    def __init__(self, arch, variant, init="mamba", d=32, layers=2, heads=4):
+    def __init__(self, arch, variant, init="mamba", d=32, layers=2, heads=4, out_norm="none"):
         super().__init__()
         self.emb = nn.Embedding(3, d)
         if arch == "mamba1":
             mk = lambda: Mamba1Layer(d, variant, init)
         elif arch == "mamba2":
-            mk = lambda: Mamba2Layer(d, variant, init, heads=heads, headdim=64 // heads)
+            mk = lambda: Mamba2Layer(d, variant, init, heads=heads, headdim=64 // heads, out_norm=out_norm)
         else:
             raise ValueError(arch)
         self.layers = nn.ModuleList(mk() for _ in range(layers))

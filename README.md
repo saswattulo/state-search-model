@@ -57,6 +57,9 @@ python train.py --help                # steps, lengths, lr, d-model, layers, dev
 | `--arch` | `mamba1` / `mamba2` | per-(channel, state) decay with a sequential scan / one decay per head with chunked SSD |
 | `--variant` | `pos` / `signed` / `split` | a ∈ (0,1) / `2·exp(−ΔA)−1` / `tanh(g)·exp(−ΔA)` |
 | `--init` | `naive` / `mamba` | dt bias 0 / Mamba-2 init (dt ~ logU[1e-3, 1e-1], A ~ U[1, 16]) |
+| `--out-norm` | `none` / `gated-rms` | mamba2 only: no norm / Mamba-2's `RMSNorm(y · silu(z))` before the output projection |
+
+`python sweep.py --preset outnorm` reruns the Mamba-2 half of `main` with `--out-norm gated-rms`.
 
 Training uses lengths `--min-len`..`--max-len` (default 4–64). Evaluation reports final-position
 parity accuracy at each of `--eval-lens`; 0.5 is chance.
