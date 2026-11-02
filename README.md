@@ -83,17 +83,49 @@ long L mostly measure loop overhead, not a GPU kernel.
 | `bench.py` | speed benchmarks |
 | `docs/explainer.html` | the write-up |
 
-## Results so far (4-core cloud CPU, 3 seeds each)
+## Results
 
-| model | train len | ~3–4× | ~13–16× |
+`python sweep.py --preset main`, run locally (6-core CPU, 3 parallel jobs, ~75 min). Raw data in
+[`results.jsonl`](results.jsonl). Final-position parity accuracy; 0.5 is chance; ranges are
+min–max over 3 seeds.
+
+**Mamba-1-style** (per-(channel, state) decay, sequential scan), trained on lengths 4–40:
+
+| variant | L=40 (train) | L=128 (3×) | L=512 (13×) |
 |---|---|---|---|
-| mamba1 pos (naive init) | 0.52–0.57 | 0.50–0.52 | 0.49–0.55 |
-| mamba1 signed (naive init) | **1.00** | **1.00** | **1.00** |
-| mamba2 pos (mamba init) | 0.48–0.52 | 0.48–0.54 | 0.45–0.49 |
-| mamba2 signed (mamba init) | **1.00** | 1.00, 1.00, 0.51 | 0.47–0.52 |
+| pos | 0.43–0.54 | 0.44–0.47 | 0.45–0.54 |
+| signed | **1.00** ×3 | 0.98–1.00 | 1.00, 1.00, 0.535 |
+| split | **1.00** ×3 | **1.00** ×3 | **1.00** ×3 |
+
+**Mamba-2-style** (one decay per head, chunked SSD), trained on lengths 4–64:
+
+| variant | heads | L=64 (train) | L=256 (4×) | L=1024 (16×) | L=4096 (64×) |
+|---|---|---|---|---|---|
+| pos | 4 | 0.50–0.54 | 0.52–0.54 | 0.46–0.51 | 0.46–0.52 |
+| signed | 4 | **1.00** ×3 | 1.00, 0.75, 0.46 | 0.47–0.55 | 0.48–0.54 |
+| split | 4 | **1.00** ×3 | 1.00, 0.75, 0.61 | 0.45–0.54 | 0.50–0.55 |
+| signed | 16 | **1.00** ×3 | 1.00, 1.00, 0.64 | 0.51–0.85 | 0.46–0.55 |
+| split | 16 | **1.00** ×3 | **1.00** ×3 | 0.50–0.56 | 0.49–0.54 |
+
+What this shows:
+
+- Positive decays (standard Mamba) never learn parity, even at training length. Negative
+  eigenvalues are required in both architectures.
+- Mamba-1-style: `split` is the only variant perfect at 13× on every seed. `signed` failed on one
+  seed. (An earlier cloud run had `signed` 3/3 at L=512 with a slightly different length setup:
+  40 bits + BOS instead of 39 + BOS.)
+- Mamba-2-style: every signed or split model learns parity in distribution, and more heads plus
+  the split gate help at 4×, but **nothing generalises to 16×**. So "|a| cannot reach 1" (split)
+  and "too few decays" (16 heads) are not the main cause.
 
 Signed SSD vs the sequential loop, float64: relative error 5e-16, gradients within 6e-14.
 Training step speedup over the loop on CPU: 16× at L=512, 57× at L=2048.
 
-Open question: why does the per-head (Mamba-2) model extrapolate worse? The `split` variant and
-`--heads 16` runs in the `main` preset test two hypotheses.
+### Open question
+
+The Mamba-2-style layer here omits two parts of the real Mamba-2 block: the gated RMSNorm
+before the output projection and the short causal conv. Next hypothesis: the state's *sign* still
+tracks parity at long lengths but its *magnitude* decays, so the signal sinks below the residual
+stream. A norm on the SSM output would make the readout depend only on the sign.
+
+The explainer in `docs/explainer.html` is a snapshot of the earlier cloud runs.
