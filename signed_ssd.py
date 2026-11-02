@@ -9,6 +9,9 @@ Gauge lemma. Let s_t = prod_{k<=t} sign(a_k) in {+1,-1} and h~_t = s_t h_t. Then
     y_t  = s_t (h~_t C_t)
 so  SSD_signed(a, x) = s * SSD_positive(|a|, s * x).
 Matrix view: the 1-semiseparable mask factorises as L_signed = diag(s) L_|a| diag(s).
+
+Credit: this is the rotation-by-pi case of Mamba-3's "RoPE trick" (arXiv 2603.15569, Prop. 3 / Eq. 10).
+s_t x_t B_t^T = x_t (s_t B_t)^T and s_t (h~_t C_t) = h~_t (s_t C_t): the running sign is applied to B and C.
 """
 import torch
 import torch.nn.functional as F

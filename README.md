@@ -7,12 +7,26 @@ Small, CPU-friendly experiments on selective state space models (Mamba-style).
 - **Signed SSD.** A gauge transform that runs the (−1, 1) fix through Mamba-2's fast chunked SSD
   algorithm *unchanged*. The stock algorithm works in log-space and returns NaN for negative
   decays. With `s_t = Π sign(a_k)`: `SSD_signed(a, x) = s ⊙ SSD_positive(|a|, s ⊙ x)`.
+  This is the rotation-by-π special case of Mamba-3's "RoPE trick" (see Related work).
 - **Split** (new, not yet tested at scale): `a = tanh(g) · exp(−Δ·A)`. A separate sign gate lets
   "keep" (+1) and "flip" (−1) both hold |a| ≈ 1. This targets the length-extrapolation gap of the
   Mamba-2-style model.
 
 The full explainer (theory, lineage, applications, results) is in
 [`docs/explainer.html`](docs/explainer.html). Open it in a browser.
+
+## Related work
+
+- Grazzi et al., [Unlocking State-Tracking in Linear RNNs Through Negative Eigenvalues](https://arxiv.org/abs/2411.12537),
+  ICLR 2025: the (−1, 1) fix and the parity result. They patched Mamba-1's CUDA scan by hand and
+  left log-space (Mamba-2 style) kernels to future work.
+- [Mamba-3](https://arxiv.org/abs/2603.15569), March 2026: complex (rotational) state updates run
+  through the unmodified Mamba-2 SSD kernel by keeping the decay real and positive and applying the
+  running product of rotations to B and C (Proposition 3, Eq. 10, the "RoPE trick"). Multiplying
+  x and y by the running sign `s_t` is the same as multiplying B and C by it, so `ssd_signed` is
+  that trick with every rotation equal to ±1. An earlier version of this repo did not credit this.
+  What the sign version adds is narrow: it runs Grazzi et al.'s real (−1, 1) decays exactly, with
+  integer signs and no extra state dimension.
 
 ## Setup (once)
 

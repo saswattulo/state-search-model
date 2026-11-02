@@ -76,7 +76,7 @@ td.n { font-family: var(--f-mono); font-variant-numeric: tabular-nums; text-alig
 <main>
   <span class="eyebrow">Sequence models · Deep dive + experiment</span>
   <h1>State Space Models, down to the scan</h1>
-  <p class="lede">What an SSM is, why S4 and Mamba work, where SSMs are used, and a structural flaw in the standard Mamba parameterisation. I reproduce the flaw, fix it with a one-line change, and then make the fix run on Mamba-2's fast chunked algorithm, which the original authors left as future work.</p>
+  <p class="lede">What an SSM is, why S4 and Mamba work, where SSMs are used, and a structural flaw in the standard Mamba parameterisation. I reproduce the flaw, fix it with a one-line change, and then run the fix on Mamba-2's fast chunked algorithm using the 180° case of Mamba-3's “RoPE trick”.</p>
   <nav class="toc" aria-label="Sections">
     <a href="#core">1. The core equations</a><a href="#views">2. Three views</a><a href="#lineage">3. HiPPO → Mamba-3</a>
     <a href="#mamba">4. Selection &amp; the scan</a><a href="#apps">5. Applications</a><a href="#limits">6. Known limits</a>
@@ -118,7 +118,7 @@ y_k = Σ_j  C Ā^{k−j} B̄ · u_j  =  (K * u)_k</div>
     <div><span>Dec 2023</span><p><b>Mamba (S6).</b> Makes Δ, B and C functions of the input. The model stops being LTI, so the convolution view is gone. A fused, hardware-aware parallel scan on GPUs replaces it. Matches Transformers of the same size on language up to a few billion parameters.</p></div>
     <div><span>2024</span><p><b>Mamba-2 (SSD).</b> Restricts A to a scalar times the identity. The layer then equals a masked linear attention, <span class="m">y = (L ∘ CBᵀ) x</span>, and can be trained with matrix multiplies on tensor cores. 2–8× faster training. Hybrids follow: Jamba, Zamba, Samba, NVIDIA's Mamba-2-Hybrid, and later Nemotron-H and Falcon-H1.</p></div>
     <div><span>2024–25</span><p><b>Expressivity results.</b> <i>The Illusion of State</i> (Merrill et al.) shows SSMs with the usual parameterisation sit in the same circuit class (TC⁰) as Transformers, so they cannot track state in general. Grazzi et al. (ICLR 2025) show that eigenvalues restricted to [0,1] cannot solve parity, and that allowing [−1,1] fixes it. A 2025 follow-up shows that stacking LTI layers with non-negative selective layers does not help: one layer must be both input-dependent and allow negative eigenvalues. Gated DeltaNet and DeltaProduct add non-diagonal (Householder) transitions.</p></div>
-    <div><span>2026</span><p><b>Mamba-3</b> (arXiv, March 2026). Exponential-trapezoidal discretisation, complex-valued (rotational) state updates for state tracking, and a MIMO formulation that raises arithmetic intensity during decoding. All three aim at the expressivity and hardware-efficiency gaps above.</p></div>
+    <div><span>2026</span><p><b>Mamba-3</b> (arXiv, March 2026). Exponential-trapezoidal discretisation, complex-valued (rotational) state updates for state tracking, and a MIMO formulation that raises arithmetic intensity during decoding. All three aim at the expressivity and hardware-efficiency gaps above. Its “RoPE trick” runs the complex updates through the unmodified Mamba-2 SSD kernel: the decay magnitude stays real and positive, and the running product of rotations is applied to B and C.</p></div>
   </div>
 
   <h2 id="mamba">4. Selection and the parallel scan</h2>
@@ -200,21 +200,21 @@ if self.neg:
   <ul>
     <li><b>Parameters and FLOPs:</b> none. It is an affine remap of a value the layer already computes.</li>
     <li><b>Parallel scan:</b> still valid, because the affine-composition operator is associative for any real a_t.</li>
-    <li><b>Kernels:</b> this was the real cost. Mamba-2/SSD computes decay products as <span class="m">exp(cumsum(log a))</span>, which returns NaN for a &lt; 0. Grazzi et al. name this as a limitation: they patched Mamba-1's CUDA scan by hand and left log-space models to future work. Section 9 removes the problem without touching the kernel.</li>
+    <li><b>Kernels:</b> this was the real cost. Mamba-2/SSD computes decay products as <span class="m">exp(cumsum(log a))</span>, which returns NaN for a &lt; 0. Grazzi et al. name this as a limitation: they patched Mamba-1's CUDA scan by hand and left log-space models to future work. Section 9 runs it on the unmodified kernel using a special case of Mamba-3's RoPE trick.</li>
     <li><b>Language modelling:</b> mixed. In Grazzi et al.'s 370M-parameter runs, the [−1,1] Mamba trained stably but had slightly worse perplexity (Wikitext 24.84 → 25.02) and worse perplexity on code and math. The gains are concentrated in state-tracking tasks. It also does nothing for recall-heavy tasks; that is limit 1 above, a separate problem.</li>
     <li><b>What it does not fix:</b> diagonal transitions with negative entries can represent abelian, sign-flip structure (parity, modular counting by 2). Non-abelian tasks such as composing permutations of 5 elements still need non-diagonal transitions: products of Householder reflections (DeltaProduct) or the complex rotations of Mamba-3.</li>
   </ul>
 
   <h2 id="signed">9. Signed SSD: the fix at Mamba-2 speed</h2>
-  <p>Mamba-2 trains fast because its chunked SSD algorithm turns the scan into matrix multiplies. It builds the decay mask as <span class="m">exp(segsum(log a))</span>. A negative a has no real logarithm, so feeding the fix from section 8 into the stock algorithm gives <strong>NaN in 100% of outputs</strong> (tested below). Grazzi et al. list this as a limitation and leave it to future work. Combining three facts already on this page removes the problem.</p>
+  <p>Mamba-2 trains fast because its chunked SSD algorithm turns the scan into matrix multiplies. It builds the decay mask as <span class="m">exp(segsum(log a))</span>. A negative a has no real logarithm, so feeding the fix from section 8 into the stock algorithm gives <strong>NaN in 100% of outputs</strong> (tested below). Grazzi et al. list this as a limitation and leave it to future work. Mamba-3 (March 2026) solves the general version for complex rotations with its “RoPE trick” (Proposition 3, Eq. 10): keep the decay magnitude real and positive for the SSD kernel, and apply the running product of rotations to B and C. A sign flip is a rotation by π, so the same idea runs Grazzi et al.'s (−1, 1) decays with integer signs and no extra state dimension.</p>
   <div class="callout">
-    <b>Gauge lemma.</b>
+    <b>Gauge lemma (the π case of Mamba-3's RoPE trick).</b>
     <span>Let <span class="m">s_t = sign(a_1)·sign(a_2)⋯sign(a_t) ∈ {+1, −1}</span> and define the re-signed state <span class="m">h̃_t = s_t h_t</span>. Since <span class="m">s_t a_t = |a_t| s_{t−1}</span>:</span>
     <div class="eq">h̃_t = |a_t| · h̃_{t−1} + (s_t x_t) B_tᵀ          <span class="c"># an ordinary positive-decay SSM</span>
 y_t = s_t · (h̃_t C_t)
 
 ⇒  SSD_signed(a, x) = s ⊙ SSD_positive(|a|, s ⊙ x)</div>
-    <span>In the matrix view of section 4, the signed semiseparable mask factorises as <span class="m">L_signed = diag(s) · L_|a| · diag(s)</span>, because the sign of a product over a segment is <span class="m">s_i s_j</span>. Every existing positive-only kernel (Mamba-2 Triton, CUDA Tile, chunked FLA kernels) can run negative eigenvalues <em>unchanged</em>, with one cumulative sum before and two sign flips around it.</span>
+    <span>In the matrix view of section 4, the signed semiseparable mask factorises as <span class="m">L_signed = diag(s) · L_|a| · diag(s)</span>, because the sign of a product over a segment is <span class="m">s_i s_j</span>. Every existing positive-only kernel (Mamba-2 Triton, CUDA Tile, chunked FLA kernels) can run negative eigenvalues <em>unchanged</em>, with one cumulative sum before and two sign flips around it. Multiplying x and y by s_t is the same as multiplying B_t and C_t by it, which is Mamba-3's Eq. 10 with each rotation equal to ±1.</span>
   </div>
   <div class="eq">def ssd_signed(x, a, B, C, chunk=64):
     neg = (a &lt; 0).long()
@@ -254,15 +254,16 @@ y_t = s_t · (h̃_t C_t)
     </tbody>
   </table></div>
   <p>The signed SSD model learns parity every time; the positive one never does, even in distribution. Length generalisation is weaker than in section 8: the best runs hold to 4× training length and then fail. My working hypothesis is that with only one decay per head, the learned |a| for "keep" and "flip" tokens ends up close to 1 but not equal to it, so the state magnitude drifts over thousands of steps. The section 8 model has 512 independent decays per layer and more chances to land one exactly on ±1. A 16-head run reached 0.78 at L = 256, which is not enough evidence either way. This is the main open question from this work.</p>
+  <p class="note">Update (Nov 2026): a 39-run sweep on a local machine ruled this hypothesis out. A separate sign gate (<span class="m">a = tanh(g)·exp(−ΔA)</span>), 16 heads, and Mamba-2's gated RMSNorm all fail to reach 16× training length; the norm made 4× worse. The repository README has the tables.</p>
 
   <h2 id="next">10. What to build next</h2>
   <ol>
-    <li><b>Drop the gauge into a real GPU kernel.</b> Wrap <span class="m">mamba_chunk_scan_combined</span> from <span class="m">mamba_ssm</span> with the three lines above and train a 130M–370M model with <span class="m">a = 2·exp(Δ·A) − 1</span>. This tests the fix at scale at Mamba-2 speed, which Grazzi et al. could not do.</li>
+    <li><b>Drop the gauge into a real GPU kernel.</b> Wrap <span class="m">mamba_chunk_scan_combined</span> from <span class="m">mamba_ssm</span> with the three lines above and train a 130M–370M model with <span class="m">a = 2·exp(Δ·A) − 1</span>. This tests Grazzi et al.'s fix at scale at Mamba-2 speed, next to Mamba-3's rotations.</li>
     <li><b>Make |a| = 1 reachable.</b> Parameterise sign and magnitude separately (for example, magnitude in log-space pinned near 0, sign from a separate gate) so a "flip" can be exactly −1 without Δ → ∞. This targets the extrapolation gap above.</li>
     <li><b>Hybrid for recall.</b> Roughly one attention layer per 6–8 signed-SSD layers handles retrieval, which fixed-size state cannot. Test MQAR (recall) and S5 permutation or modular arithmetic (state tracking) on the same model.</li>
-    <li><b>Beyond abelian.</b> Sign flips cover parity-like structure. Composing permutations needs rotations or Householder products (Mamba-3, DeltaProduct). The gauge idea extends to any transition group with a cheap prefix product, which is worth working out for complex phases.</li>
+    <li><b>Beyond abelian.</b> Sign flips cover parity-like structure. Composing permutations needs rotations or Householder products (Mamba-3, DeltaProduct). Mamba-3 has already worked this out for complex phases (rotations applied to B and C). The open question is which tasks need which group.</li>
   </ol>
-  <p class="note">Code: <span class="m">ssm_parity.py</span> (section 8), <span class="m">signed_ssd.py</span> (gauge lemma, tests, benchmarks), <span class="m">parity_ssd.py</span> (Mamba-2-style end-to-end run). The sequential scans are Python loops for clarity, not speed. I did not find this gauge construction in the papers I checked, but it is a short derivation and may exist elsewhere.</p>
+  <p class="note">Code: <span class="m">signed_ssd.py</span> (gauge lemma), <span class="m">models.py</span> and <span class="m">train.py</span> (<span class="m">--arch mamba1</span> for section 8, <span class="m">--arch mamba2</span> for section 9), <span class="m">test_signed_ssd.py</span> and <span class="m">bench.py</span>. The sequential scans are Python loops for clarity, not speed. Correction (Nov 2026): the gauge construction is the π-rotation special case of Mamba-3's RoPE trick (Proposition 3, Eq. 10). An earlier version of this page did not credit it.</p>
 
   <h2 id="sources">Sources</h2>
   <ul class="note">
