@@ -22,13 +22,19 @@ PRESETS = {
         ("mamba2", "pos", "mamba", 4), ("mamba2", "signed", "mamba", 4), ("mamba2", "split", "mamba", 4),
         ("mamba2", "signed", "mamba", 16), ("mamba2", "split", "mamba", 16),
     ], seeds=[0, 1, 2], extra=[]),
+    # the Mamba-2 half of "main" again, with Mamba-2's gated RMSNorm on the SSM output
+    "outnorm": dict(grid=[
+        ("mamba2", "pos", "mamba", 4), ("mamba2", "signed", "mamba", 4), ("mamba2", "split", "mamba", 4),
+        ("mamba2", "signed", "mamba", 16), ("mamba2", "split", "mamba", 16),
+    ], seeds=[0, 1, 2], extra=["--out-norm", "gated-rms"]),
 }
 # mamba1 uses a Python-loop scan, so evaluate it at shorter lengths to keep runtime sane
 MAMBA1_EXTRA = ["--max-len", "40", "--min-len", "4", "--eval-lens", "40,128,512"]
 
 
 def key(r):
-    return (r["arch"], r["variant"], r["init"], r["heads"] if r["arch"] == "mamba2" else 4, r["seed"])
+    return (r["arch"], r["variant"], r["init"], r["heads"] if r["arch"] == "mamba2" else 4,
+            r.get("out_norm", "none"), r["seed"])
 
 
 def load(path):
@@ -56,15 +62,16 @@ def available_ram_gb():
 def summary(rows):
     groups = {}
     for r in rows:
-        groups.setdefault(key(r)[:4], []).append(r)
-    print(f"\n{'arch':7} {'variant':7} {'init':6} {'heads':>5}  seeds  accuracy per eval length (min-max over seeds)")
+        groups.setdefault(key(r)[:5], []).append(r)
+    print(f"\n{'arch':7} {'variant':7} {'init':6} {'heads':>5} {'out_norm':9}  seeds  "
+          "accuracy per eval length (min-max over seeds)")
     for g, rs in sorted(groups.items()):
         lens = sorted({int(L) for r in rs for L in r["acc"]})
         cells = []
         for L in lens:
             v = [r["acc"][str(L)] if str(L) in r["acc"] else r["acc"][L] for r in rs]
             cells.append(f"L={L}: {min(v):.2f}-{max(v):.2f}")
-        print(f"{g[0]:7} {g[1]:7} {g[2]:6} {g[3]:5}  {len(rs):5}  " + "   ".join(cells))
+        print(f"{g[0]:7} {g[1]:7} {g[2]:6} {g[3]:5} {g[4]:9}  {len(rs):5}  " + "   ".join(cells))
 
 
 def main():
@@ -84,15 +91,16 @@ def main():
     workers = args.workers or max(1, min(cores, int(free_gb / GB_PER_JOB)))
 
     p = PRESETS[args.preset]
+    out_norm = p["extra"][p["extra"].index("--out-norm") + 1] if "--out-norm" in p["extra"] else "none"
     done = {key(r) for r in load(args.out)}
     jobs = []
     for (arch, variant, init, heads), seed in itertools.product(p["grid"], p["seeds"]):
-        if (arch, variant, init, heads, seed) in done:
+        if (arch, variant, init, heads, out_norm, seed) in done:
             continue
         cmd = [sys.executable, os.path.join(HERE, "train.py"), "--arch", arch, "--variant", variant,
                "--init", init, "--heads", str(heads), "--seed", str(seed), "--threads", "1",
                "--out", args.out] + (MAMBA1_EXTRA if arch == "mamba1" else []) + p["extra"]
-        jobs.append(((arch, variant, init, heads, seed), cmd))
+        jobs.append(((arch, variant, init, heads, out_norm, seed), cmd))
     print(f"{len(jobs)} jobs to run ({len(done)} already done), {workers} in parallel "
           f"on {cores} cores / {free_gb:.1f} GB free RAM", flush=True)
     if workers < cores and not args.workers:

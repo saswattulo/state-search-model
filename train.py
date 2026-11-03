@@ -39,6 +39,8 @@ def main(argv=None):
                     help="naive: dt bias 0 (what section 8 used); mamba: dt~logU[1e-3,1e-1], A~U[1,16]")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--heads", type=int, default=4, help="mamba2 only; head dim = 64 / heads")
+    ap.add_argument("--out-norm", choices=["none", "gated-rms"], default="none",
+                    help="mamba2 only; gated-rms = Mamba-2's RMSNorm(y * silu(z)) before out_proj")
     ap.add_argument("--d-model", type=int, default=32)
     ap.add_argument("--layers", type=int, default=2)
     ap.add_argument("--steps", type=int, default=1500)
@@ -57,7 +59,8 @@ def main(argv=None):
     torch.set_num_threads(args.threads)
     torch.manual_seed(args.seed)
     dev = torch.device(args.device)
-    model = ParityModel(args.arch, args.variant, args.init, args.d_model, args.layers, args.heads).to(dev)
+    model = ParityModel(args.arch, args.variant, args.init, args.d_model, args.layers, args.heads,
+                        args.out_norm).to(dev)
     opt = torch.optim.AdamW(model.parameters(), args.lr, weight_decay=0.01)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, args.steps)
 

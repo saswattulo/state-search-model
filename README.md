@@ -57,6 +57,9 @@ python train.py --help                # steps, lengths, lr, d-model, layers, dev
 | `--arch` | `mamba1` / `mamba2` | per-(channel, state) decay with a sequential scan / one decay per head with chunked SSD |
 | `--variant` | `pos` / `signed` / `split` | a ∈ (0,1) / `2·exp(−ΔA)−1` / `tanh(g)·exp(−ΔA)` |
 | `--init` | `naive` / `mamba` | dt bias 0 / Mamba-2 init (dt ~ logU[1e-3, 1e-1], A ~ U[1, 16]) |
+| `--out-norm` | `none` / `gated-rms` | mamba2 only: no norm / Mamba-2's `RMSNorm(y · silu(z))` before the output projection |
+
+`python sweep.py --preset outnorm` reruns the Mamba-2 half of `main` with `--out-norm gated-rms`.
 
 Training uses lengths `--min-len`..`--max-len` (default 4–64). Evaluation reports final-position
 parity accuracy at each of `--eval-lens`; 0.5 is chance.
@@ -121,11 +124,32 @@ What this shows:
 Signed SSD vs the sequential loop, float64: relative error 5e-16, gradients within 6e-14.
 Training step speedup over the loop on CPU: 16× at L=512, 57× at L=2048.
 
+### Follow-up: Mamba-2's gated RMSNorm (`--preset outnorm`)
+
+Hypothesis: the state's *sign* still tracks parity at long lengths but its *magnitude* decays,
+so the signal sinks below the residual stream. Real Mamba-2 applies `RMSNorm(y · silu(z))` before
+the output projection, which would make the readout depend only on the sign. The Mamba-2 half of
+the grid was rerun with that norm (`--out-norm gated-rms`):
+
+| variant | heads | perfect at L=256, no norm | with gated RMSNorm | L=1024, with norm |
+|---|---|---|---|---|
+| pos | 4 | 0/3 | 0/3 | 0.51–0.54 |
+| signed | 4 | 1/3 | 0/3 (best 0.996) | 0.51–0.61 |
+| split | 4 | 1/3 | 0/3 | 0.49–0.53 |
+| signed | 16 | 2/3 | 0/3 (best 0.93) | 0.48–0.54 |
+| split | 16 | **3/3** | 0/3 (best 0.84) | 0.47–0.56 |
+
+**Refuted.** The norm does not help at 16× and makes 4× worse (7/12 → 0/12 perfect runs). Every
+model still learns parity in distribution. Decay magnitude fading below the residual stream is
+not the main cause.
+
 ### Open question
 
-The Mamba-2-style layer here omits two parts of the real Mamba-2 block: the gated RMSNorm
-before the output projection and the short causal conv. Next hypothesis: the state's *sign* still
-tracks parity at long lengths but its *magnitude* decays, so the signal sinks below the residual
-stream. A norm on the SSM output would make the readout depend only on the sign.
+Mamba-1-style layers extrapolate (split: 3/3 at 13×); Mamba-2-style layers do not, and neither
+the split gate, 16 heads nor the output norm closes the gap. The SSD path matches the sequential
+scan to 5e-16, so the algorithm is not the cause; the per-head parameterisation is. The remaining
+structural difference is granularity: Mamba-1 has a separate decay for each of 64 × 8 =
+512 (channel, state) pairs, Mamba-2 one decay per head shared across the whole head's state. A
+decisive next test is `--heads 64` (head dim 1, one decay per channel) on the same SSD path.
 
 The explainer in `docs/explainer.html` is a snapshot of the earlier cloud runs.
