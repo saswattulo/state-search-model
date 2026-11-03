@@ -15,6 +15,20 @@ Small, CPU-friendly experiments on selective state space models (Mamba-style).
 The full explainer (theory, lineage, applications, results) is in
 [`docs/explainer.html`](docs/explainer.html). Open it in a browser.
 
+## The task and the data
+
+There is no dataset to download. Every batch is generated on the fly by `batch()` in
+[`train.py`](train.py): random bit strings after a BOS token, and the target at each position is
+the parity of the bits so far (is the count of 1s odd or even?). Training draws 64 fresh strings
+of random length per step (default 4–64 tokens), so 1,500 steps see about 96,000 strings and
+never repeat one. Evaluation uses new strings that are 4–64× longer than any training string.
+
+Parity is the simplest *state-tracking* task: the model must carry one bit of state across the
+whole sequence and update it exactly at every 1. It is the standard test for whether a linear
+recurrence can track state (Grazzi et al. 2025; Mamba-3), and it isolates the eigenvalue question
+from everything else a language model has to learn. The models are tiny (17k–25k parameters,
+2 layers), so one run takes 2–17 minutes on one CPU core.
+
 ## Related work
 
 - Grazzi et al., [Unlocking State-Tracking in Linear RNNs Through Negative Eigenvalues](https://arxiv.org/abs/2411.12537),
@@ -80,6 +94,42 @@ python train.py --help                # steps, lengths, lr, d-model, layers, dev
 Training uses lengths `--min-len`..`--max-len` (default 4–64). Evaluation reports final-position
 parity accuracy at each of `--eval-lens`; 0.5 is chance.
 
+## Running on a GPU
+
+The code runs on CUDA unchanged: data is generated on the device, and `sweep.py --device cuda`
+passes the device to every job (up to 4 jobs share one GPU). The chunked SSD path and many-head
+configs gain the most; the Mamba-1-style layer loops over time steps in Python and stays slow.
+
+```bash
+git clone https://github.com/saswattulo/state-search-model.git && cd state-search-model
+python3 -m venv .venv && source .venv/bin/activate
+pip install torch numpy                      # the default wheel includes CUDA
+python test_signed_ssd.py                    # 7 PASS lines
+git switch -c results/<preset>-gpu
+python sweep.py --preset <preset> --device cuda --out results_gpu.jsonl
+git add results_gpu.jsonl checkpoints/ && git commit -m "GPU run of <preset>"
+git push -u origin results/<preset>-gpu
+```
+
+Use a separate `--out results_gpu.jsonl`. GPU random numbers differ from CPU ones, so GPU runs
+are new samples, not copies of the CPU runs; a separate file also keeps jobs already in
+`results.jsonl` from being skipped and avoids merge conflicts. Combine them with
+`python sweep.py --summary results.jsonl results_gpu.jsonl`.
+
+Free GPU notebooks also work (quotas change, so check the providers' pages): Kaggle Notebooks
+(a weekly GPU-hour quota on T4/P100) and Google Colab's free tier (T4 when available).
+
+## Diagnostics
+
+```bash
+python sweep.py --preset seeds64              # 6 more seeds of the 64-head runs, saves checkpoints/
+python diagnose.py checkpoints/*.pt           # learned decays on 0-bits vs 1-bits, per model
+```
+
+`train.py --save PATH` stores a model's config and weights. `diagnose.py` replays fresh strings
+through each saved Mamba-2-style `signed`/`split` model and reports, per layer, how many heads
+are clean flip heads (mean a ≈ +1 on 0-bits and ≈ −1 on 1-bits) and the best head's decays.
+
 ## Benchmark
 
 ```bash
@@ -100,6 +150,7 @@ long L mostly measure loop overhead, not a GPU kernel.
 | `sweep.py` | parallel grid runner and summary table |
 | `test_signed_ssd.py` | correctness tests (forward, gradients, NaN check, rotation-by-π = sign flip) |
 | `bench.py` | speed benchmarks |
+| `diagnose.py` | learned-decay diagnostic for saved models |
 | `docs/explainer.html` | the write-up |
 
 ## Results
@@ -178,19 +229,58 @@ Two more hypotheses for the Mamba-2-style extrapolation gap:
 - **Per-channel decay is what helps `signed`.** No per-head `signed` or `split` run in the 27
   above got past 0.85 at 16×; with one decay per channel, 2 of 3 `signed` seeds are near-perfect
   at 16× and the best holds 0.85 at 64×. These are the first Mamba-2-style models here that
-  extrapolate.
-- **`split` does not benefit** from per-channel decay (0/3 at 16×).
+  extrapolate. (With 9 seeds the rate is lower: 3/9 at 16×. See the next section.)
+- **`split` does not benefit** from per-channel decay (0/3 at 16×; 0/9 with 9 seeds).
 - **Unit-modulus rotations extrapolate worst** (0/6 at 4×). Training only sees up to ~32 flips,
   so it does not pin the learned angle to exactly π, and angle error adds up with every flip.
   (Mamba-3 reports parity success with rotations; its training lengths, angle parameterisation
   and model size differ from this setup, so the two results are not directly comparable.)
 
+### Follow-up: what the extrapolating models learned (`--preset seeds64`, `diagnose.py`)
+
+Six more seeds (3–8) of the 64-head runs, saved as checkpoints. Pass = accuracy ≥ 0.95.
+
+| 64 heads, seeds 0–8 | L=256 (4×) | L=1024 (16×) | L=4096 (64×) |
+|---|---|---|---|
+| signed | 5/9 | **3/9** | 0/9 (best 0.85) |
+| split | 2/9 | 0/9 | 0/9 |
+
+`diagnose.py` reads each head's learned decay on every token. A *flip head* has the parity sign
+pattern on ≥ 99.9% of tokens (a > 0 on 0-bits, a < 0 on 1-bits). Its *decay length*
+L_e = 1 / (−mean log|a|) is how many tokens its signal survives before shrinking by a factor of e.
+Full table: [`docs/diagnose_seeds64.txt`](docs/diagnose_seeds64.txt).
+
+Every model has flip heads; they differ in how long-lived the best one is:
+
+| | best flip head's L_e per model |
+|---|---|
+| signed (s3–s8) | 42, 58, 659, 182, 39, 142 |
+| split (s3–s8) | 61, 32, 56, 85, 69, 61 |
+
+**Rule:** a model passes length L only if L ≤ 5 × (its best flip head's L_e). The rule was fixed
+from signed seeds 3–6 and committed (`e992adb`) before the other 8 models finished.
+
+- **As an upper bound it held everywhere:** in all 26 (model, length) cells with L > 5 × L_e,
+  no model passed.
+- **As an exact predictor it is weaker:** 27/32 held-out cells right. All 5 misses are models
+  that failed *inside* the bound (4 of them `split`), so a long-lived flip head is necessary but
+  not sufficient.
+- **Why `split` loses:** its flip heads are leaky in both directions (|a| ≈ 0.97–0.99 on 0-bits
+  and 1-bits), so its best L_e never exceeds ~85 tokens, while `signed` sometimes reaches 140–660.
+  A plausible reason (not tested): in `signed`, a flip is a = −1 + 2·exp(−ΔA), which gets within
+  0.002 of −1 once ΔA ≈ 7, while in `split` the tanh gate saturates, so the gradient pushing |a|
+  towards 1 vanishes near 0.98–0.99.
+- This also qualifies the gated-RMSNorm result above: that norm rescales all 64 channels
+  together, so it cannot rescue one flip channel whose signal is shrinking. "Magnitude does not
+  matter" was too strong; per-channel magnitude does.
+
 ### Open question
 
-Why does finer decay granularity help `signed` but not `split`? Three seeds per config is thin,
-and `signed`/`split` at 64 heads differ in parameter count (19.6k vs 23.8k). Next: more seeds for
-the 64-head configs, and a diagnostic that reads the learned decays on 0-bits vs 1-bits in each
-channel, to see which channels implement a clean flip (a ≈ −1 on 1-bits, a ≈ +1 on 0-bits) in the
-models that extrapolate versus the ones that do not.
+Training never asks for L_e beyond what the training lengths need, so how far a model
+extrapolates is down to which heads happen to end up with |a| closest to 1. Can that be made
+reliable? Candidates: a regulariser that pushes log|a| towards 0 on flip-like heads, a
+parameterisation where both keep and flip sit at |a| = 1 with non-vanishing gradients, or a
+length curriculum. The rule above gives a cheap check for each: train, measure L_e, and read
+off the predicted extrapolation limit.
 
 The explainer in `docs/explainer.html` is a snapshot of the earlier cloud runs.

@@ -27,6 +27,9 @@ PRESETS = {
         ("mamba2", "pos", "mamba", 4), ("mamba2", "signed", "mamba", 4), ("mamba2", "split", "mamba", 4),
         ("mamba2", "signed", "mamba", 16), ("mamba2", "split", "mamba", 16),
     ], seeds=[0, 1, 2], extra=["--out-norm", "gated-rms"]),
+    # six more seeds of the per-channel configs, with checkpoints for diagnose.py
+    "seeds64": dict(grid=[("mamba2", "signed", "mamba", 64), ("mamba2", "split", "mamba", 64)],
+                    seeds=[3, 4, 5, 6, 7, 8], extra=[], save=True),
     # unit-modulus rotations (Mamba-3 style), and one decay per channel (head dim 1)
     "rotation": dict(grid=[
         ("mamba2", "rotate", "mamba", 4), ("mamba2", "rotate", "mamba", 16),
@@ -74,8 +77,8 @@ def summary(rows):
         lens = sorted({int(L) for r in rs for L in r["acc"]})
         cells = []
         for L in lens:
-            v = [r["acc"][str(L)] if str(L) in r["acc"] else r["acc"][L] for r in rs]
-            cells.append(f"L={L}: {min(v):.2f}-{max(v):.2f}")
+            v = [r["acc"][str(L)] for r in rs if str(L) in r["acc"]]   # runs may use different eval lengths
+            cells.append(f"L={L}: {min(v):.2f}-{max(v):.2f}" + (f" (n={len(v)})" if len(v) < len(rs) else ""))
         print(f"{g[0]:7} {g[1]:7} {g[2]:6} {g[3]:5} {g[4]:9}  {len(rs):5}  " + "   ".join(cells))
 
 
@@ -85,15 +88,18 @@ def main():
     ap.add_argument("--workers", type=int, default=None,
                     help=f"parallel jobs (default: min(cores, free RAM / {GB_PER_JOB} GB))")
     ap.add_argument("--out", default=os.path.join(HERE, "results.jsonl"))
-    ap.add_argument("--summary", metavar="FILE", help="only print the summary table of FILE")
+    ap.add_argument("--summary", metavar="FILE", nargs="+", help="only print the summary table of FILE(s)")
+    ap.add_argument("--device", default="cpu", help="cpu, cuda or mps; passed to every train.py job")
     args = ap.parse_args()
 
     if args.summary:
-        summary(load(args.summary)); return
+        summary([r for f in args.summary for r in load(f)]); return
 
     cores = os.cpu_count() or 1
     free_gb = available_ram_gb()
     workers = args.workers or max(1, min(cores, int(free_gb / GB_PER_JOB)))
+    if args.device != "cpu" and not args.workers:
+        workers = min(workers, 4)   # tiny models: a few processes share one GPU well
 
     p = PRESETS[args.preset]
     out_norm = p["extra"][p["extra"].index("--out-norm") + 1] if "--out-norm" in p["extra"] else "none"
@@ -105,10 +111,13 @@ def main():
         cmd = [sys.executable, os.path.join(HERE, "train.py"), "--arch", arch, "--variant", variant,
                "--init", init, "--heads", str(heads), "--seed", str(seed), "--threads", "1",
                "--out", args.out] + (MAMBA1_EXTRA if arch == "mamba1" else []) + p["extra"] \
-              + (["--eval-micro", "8"] if heads >= 32 else [])   # many heads: smaller eval batches
+              + (["--eval-micro", "8"] if heads >= 32 else []) \
+              + ["--device", args.device]
+        if p.get("save"):
+            cmd += ["--save", os.path.join(HERE, "checkpoints", f"{arch}-{variant}-h{heads}-{out_norm}-s{seed}.pt")]
         jobs.append(((arch, variant, init, heads, out_norm, seed), cmd))
     print(f"{len(jobs)} jobs to run ({len(done)} already done), {workers} in parallel "
-          f"on {cores} cores / {free_gb:.1f} GB free RAM", flush=True)
+          f"on {cores} cores / {free_gb:.1f} GB free RAM, device {args.device}", flush=True)
     if workers < cores and not args.workers:
         print(f"  limited by free memory; close other apps or pass --workers N to override", flush=True)
 
