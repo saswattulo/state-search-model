@@ -69,11 +69,13 @@ python train.py --help                # steps, lengths, lr, d-model, layers, dev
 | flag | choices | meaning |
 |---|---|---|
 | `--arch` | `mamba1` / `mamba2` | per-(channel, state) decay with a sequential scan / one decay per head with chunked SSD |
-| `--variant` | `pos` / `signed` / `split` | a ∈ (0,1) / `2·exp(−ΔA)−1` / `tanh(g)·exp(−ΔA)` |
+| `--variant` | `pos` / `signed` / `split` / `rotate` | a ∈ (0,1) / `2·exp(−ΔA)−1` / `tanh(g)·exp(−ΔA)` / `exp(−ΔA)·R(θ)`: Mamba-3-style unit-modulus rotations of state-dim pairs with a free angle θ (mamba2 only) |
 | `--init` | `naive` / `mamba` | dt bias 0 / Mamba-2 init (dt ~ logU[1e-3, 1e-1], A ~ U[1, 16]) |
 | `--out-norm` | `none` / `gated-rms` | mamba2 only: no norm / Mamba-2's `RMSNorm(y · silu(z))` before the output projection |
 
 `python sweep.py --preset outnorm` reruns the Mamba-2 half of `main` with `--out-norm gated-rms`.
+`python sweep.py --preset rotation` runs `rotate` (4 and 16 heads) and per-channel decay
+(`--heads 64`, head dim 1) for `signed` and `split`.
 
 Training uses lengths `--min-len`..`--max-len` (default 4–64). Evaluation reports final-position
 parity accuracy at each of `--eval-lens`; 0.5 is chance.
@@ -92,11 +94,11 @@ long L mostly measure loop overhead, not a GPU kernel.
 
 | file | contents |
 |---|---|
-| `signed_ssd.py` | reference scan, Mamba-2 chunked SSD, the gauge-transformed signed SSD |
+| `signed_ssd.py` | reference scans, Mamba-2 chunked SSD, signed SSD (sign gauge), rotary SSD (RoPE trick) |
 | `models.py` | Mamba-1-style and Mamba-2-style layers with the three decay variants |
 | `train.py` | train and evaluate one configuration; prints one JSON line |
 | `sweep.py` | parallel grid runner and summary table |
-| `test_signed_ssd.py` | correctness tests (forward, gradients, NaN check) |
+| `test_signed_ssd.py` | correctness tests (forward, gradients, NaN check, rotation-by-π = sign flip) |
 | `bench.py` | speed benchmarks |
 | `docs/explainer.html` | the write-up |
 
@@ -157,13 +159,38 @@ the grid was rerun with that norm (`--out-norm gated-rms`):
 model still learns parity in distribution. Decay magnitude fading below the residual stream is
 not the main cause.
 
+### Follow-up: rotations and per-channel decay (`--preset rotation`)
+
+Two more hypotheses for the Mamba-2-style extrapolation gap:
+
+- **Flips shrink the state.** With `signed` and `split`, every flip has |a| < 1. The `rotate`
+  variant (Mamba-3 style) flips by rotating a pair of state dims by θ = π with modulus exactly 1.
+- **Decays are too coarse.** Mamba-1 has a separate decay for each of 64 × 8 = 512 (channel,
+  state) pairs; Mamba-2 one per head. `--heads 64` (head dim 1) gives one decay per channel.
+
+| variant | heads | L=64 (train) | L=256 (4×) | L=1024 (16×) | L=4096 (64×) |
+|---|---|---|---|---|---|
+| rotate | 4 | **1.00** ×3 | 0.46–0.54 | 0.47–0.55 | 0.45–0.52 |
+| rotate | 16 | **1.00** ×3 | 0.52–0.54 | 0.50–0.55 | 0.45–0.51 |
+| split | 64 | **1.00** ×3 | 1.00, 0.95, 0.55 | 0.46–0.50 | 0.52–0.57 |
+| **signed** | **64** | **1.00** ×3 | **1.00, 1.00**, 0.93 | **1.00, 0.988**, 0.48 | 0.85, 0.53, 0.48 |
+
+- **Per-channel decay is what helps `signed`.** No per-head `signed` or `split` run in the 27
+  above got past 0.85 at 16×; with one decay per channel, 2 of 3 `signed` seeds are near-perfect
+  at 16× and the best holds 0.85 at 64×. These are the first Mamba-2-style models here that
+  extrapolate.
+- **`split` does not benefit** from per-channel decay (0/3 at 16×).
+- **Unit-modulus rotations extrapolate worst** (0/6 at 4×). Training only sees up to ~32 flips,
+  so it does not pin the learned angle to exactly π, and angle error adds up with every flip.
+  (Mamba-3 reports parity success with rotations; its training lengths, angle parameterisation
+  and model size differ from this setup, so the two results are not directly comparable.)
+
 ### Open question
 
-Mamba-1-style layers extrapolate (split: 3/3 at 13×); Mamba-2-style layers do not, and neither
-the split gate, 16 heads nor the output norm closes the gap. The SSD path matches the sequential
-scan to 5e-16, so the algorithm is not the cause; the per-head parameterisation is. The remaining
-structural difference is granularity: Mamba-1 has a separate decay for each of 64 × 8 =
-512 (channel, state) pairs, Mamba-2 one decay per head shared across the whole head's state. A
-decisive next test is `--heads 64` (head dim 1, one decay per channel) on the same SSD path.
+Why does finer decay granularity help `signed` but not `split`? Three seeds per config is thin,
+and `signed`/`split` at 64 heads differ in parameter count (19.6k vs 23.8k). Next: more seeds for
+the 64-head configs, and a diagnostic that reads the learned decays on 0-bits vs 1-bits in each
+channel, to see which channels implement a clean flip (a ≈ −1 on 1-bits, a ≈ +1 on 0-bits) in the
+models that extrapolate versus the ones that do not.
 
 The explainer in `docs/explainer.html` is a snapshot of the earlier cloud runs.

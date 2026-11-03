@@ -8,12 +8,14 @@ Decay parameterisations (variant):
   signed a = 2 * exp(-dt * A) - 1                in (-1, 1)   Grazzi et al. 2025
   split  a = tanh(g) * exp(-dt * A)              in (-1, 1)   separate sign gate g and magnitude;
          "keep" (a=+1) and "flip" (a=-1) both sit at dt -> 0, so |a| can stay at 1 for both.
+  rotate exp(-dt * A) * R(theta), mamba2 only      Mamba-3-style: unit-modulus rotations of pairs of
+         state dims with a free, data-dependent angle theta (a flip is theta = pi, with no shrinkage).
 """
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from signed_ssd import ssd_positive, ssd_signed
+from signed_ssd import ssd_positive, ssd_rotary, ssd_signed
 
 
 def decay(log_mag, gate, variant):
@@ -87,7 +89,7 @@ class Mamba2Layer(nn.Module):
         di = heads * headdim
         self.norm = nn.LayerNorm(d)
         self.out_norm = GatedRMSNorm(di) if out_norm == "gated-rms" else None
-        self.extra = heads if variant == "split" else 0
+        self.extra = {"split": heads, "rotate": heads * (d_state // 2)}.get(variant, 0)
         self.in_proj = nn.Linear(d, 2 * di + 2 * d_state + heads + self.extra)
         self.A_log = nn.Parameter(torch.zeros(heads))
         if init == "mamba":
@@ -100,7 +102,7 @@ class Mamba2Layer(nn.Module):
     def forward(self, u):
         b, l, _ = u.shape
         parts = self.in_proj(self.norm(u)).split(
-            [self.h * self.p, self.h * self.p, self.n, self.n, self.h] + ([self.h] if self.extra else []), -1)
+            [self.h * self.p, self.h * self.p, self.n, self.n, self.h] + ([self.extra] if self.extra else []), -1)
         x, z, B, C, dt = parts[:5]
         gate = parts[5] if self.extra else None
         x = F.silu(x).view(b, l, self.h, self.p)
@@ -111,6 +113,8 @@ class Mamba2Layer(nn.Module):
         log_mag = -dt * self.A_log.exp()
         if self.variant == "pos":
             y = ssd_positive(xdt, log_mag, B, C, self.chunk)
+        elif self.variant == "rotate":
+            y = ssd_rotary(xdt, log_mag, gate.view(b, l, self.h, self.n // 2), B, C, self.chunk)
         else:
             y = ssd_signed(xdt, decay(log_mag, gate, self.variant), B, C, self.chunk)
         y = (y + x * self.D[:, None]).reshape(b, l, -1)
@@ -124,6 +128,8 @@ class ParityModel(nn.Module):
         super().__init__()
         self.emb = nn.Embedding(3, d)
         if arch == "mamba1":
+            if variant == "rotate":
+                raise ValueError("variant 'rotate' is implemented for arch mamba2 only")
             mk = lambda: Mamba1Layer(d, variant, init)
         elif arch == "mamba2":
             mk = lambda: Mamba2Layer(d, variant, init, heads=heads, headdim=64 // heads, out_norm=out_norm)

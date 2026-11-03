@@ -34,7 +34,7 @@ def evaluate(model, L, n, micro, device):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--arch", choices=["mamba1", "mamba2"], default="mamba2")
-    ap.add_argument("--variant", choices=["pos", "signed", "split"], default="signed")
+    ap.add_argument("--variant", choices=["pos", "signed", "split", "rotate"], default="signed")
     ap.add_argument("--init", choices=["naive", "mamba"], default="mamba",
                     help="naive: dt bias 0 (what section 8 used); mamba: dt~logU[1e-3,1e-1], A~U[1,16]")
     ap.add_argument("--seed", type=int, default=0)
