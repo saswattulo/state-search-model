@@ -15,6 +15,20 @@ Small, CPU-friendly experiments on selective state space models (Mamba-style).
 The full explainer (theory, lineage, applications, results) is in
 [`docs/explainer.html`](docs/explainer.html). Open it in a browser.
 
+## The task and the data
+
+There is no dataset to download. Every batch is generated on the fly by `batch()` in
+[`train.py`](train.py): random bit strings after a BOS token, and the target at each position is
+the parity of the bits so far (is the count of 1s odd or even?). Training draws 64 fresh strings
+of random length per step (default 4–64 tokens), so 1,500 steps see about 96,000 strings and
+never repeat one. Evaluation uses new strings that are 4–64× longer than any training string.
+
+Parity is the simplest *state-tracking* task: the model must carry one bit of state across the
+whole sequence and update it exactly at every 1. It is the standard test for whether a linear
+recurrence can track state (Grazzi et al. 2025; Mamba-3), and it isolates the eigenvalue question
+from everything else a language model has to learn. The models are tiny (17k–25k parameters,
+2 layers), so one run takes 2–17 minutes on one CPU core.
+
 ## Related work
 
 - Grazzi et al., [Unlocking State-Tracking in Linear RNNs Through Negative Eigenvalues](https://arxiv.org/abs/2411.12537),
@@ -80,6 +94,42 @@ python train.py --help                # steps, lengths, lr, d-model, layers, dev
 Training uses lengths `--min-len`..`--max-len` (default 4–64). Evaluation reports final-position
 parity accuracy at each of `--eval-lens`; 0.5 is chance.
 
+## Running on a GPU
+
+The code runs on CUDA unchanged: data is generated on the device, and `sweep.py --device cuda`
+passes the device to every job (up to 4 jobs share one GPU). The chunked SSD path and many-head
+configs gain the most; the Mamba-1-style layer loops over time steps in Python and stays slow.
+
+```bash
+git clone https://github.com/saswattulo/state-search-model.git && cd state-search-model
+python3 -m venv .venv && source .venv/bin/activate
+pip install torch numpy                      # the default wheel includes CUDA
+python test_signed_ssd.py                    # 7 PASS lines
+git switch -c results/<preset>-gpu
+python sweep.py --preset <preset> --device cuda --out results_gpu.jsonl
+git add results_gpu.jsonl checkpoints/ && git commit -m "GPU run of <preset>"
+git push -u origin results/<preset>-gpu
+```
+
+Use a separate `--out results_gpu.jsonl`. GPU random numbers differ from CPU ones, so GPU runs
+are new samples, not copies of the CPU runs; a separate file also keeps jobs already in
+`results.jsonl` from being skipped and avoids merge conflicts. Combine them with
+`python sweep.py --summary results.jsonl results_gpu.jsonl`.
+
+Free GPU notebooks also work (quotas change, so check the providers' pages): Kaggle Notebooks
+(a weekly GPU-hour quota on T4/P100) and Google Colab's free tier (T4 when available).
+
+## Diagnostics
+
+```bash
+python sweep.py --preset seeds64              # 6 more seeds of the 64-head runs, saves checkpoints/
+python diagnose.py checkpoints/*.pt           # learned decays on 0-bits vs 1-bits, per model
+```
+
+`train.py --save PATH` stores a model's config and weights. `diagnose.py` replays fresh strings
+through each saved Mamba-2-style `signed`/`split` model and reports, per layer, how many heads
+are clean flip heads (mean a ≈ +1 on 0-bits and ≈ −1 on 1-bits) and the best head's decays.
+
 ## Benchmark
 
 ```bash
@@ -100,6 +150,7 @@ long L mostly measure loop overhead, not a GPU kernel.
 | `sweep.py` | parallel grid runner and summary table |
 | `test_signed_ssd.py` | correctness tests (forward, gradients, NaN check, rotation-by-π = sign flip) |
 | `bench.py` | speed benchmarks |
+| `diagnose.py` | learned-decay diagnostic for saved models |
 | `docs/explainer.html` | the write-up |
 
 ## Results

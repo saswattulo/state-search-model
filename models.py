@@ -89,6 +89,7 @@ class Mamba2Layer(nn.Module):
         di = heads * headdim
         self.norm = nn.LayerNorm(d)
         self.out_norm = GatedRMSNorm(di) if out_norm == "gated-rms" else None
+        self.record = False   # diagnose.py sets this to read the decays back from self.recorded
         self.extra = {"split": heads, "rotate": heads * (d_state // 2)}.get(variant, 0)
         self.in_proj = nn.Linear(d, 2 * di + 2 * d_state + heads + self.extra)
         self.A_log = nn.Parameter(torch.zeros(heads))
@@ -111,12 +112,15 @@ class Mamba2Layer(nn.Module):
         C = C[:, :, None].expand(b, l, self.h, self.n)
         xdt = x * dt[..., None]
         log_mag = -dt * self.A_log.exp()
+        a = None if self.variant in ("pos", "rotate") else decay(log_mag, gate, self.variant)
+        if self.record:                                                  # real decay per (token, head)
+            self.recorded = (log_mag.exp() if a is None else a).detach()
         if self.variant == "pos":
             y = ssd_positive(xdt, log_mag, B, C, self.chunk)
         elif self.variant == "rotate":
             y = ssd_rotary(xdt, log_mag, gate.view(b, l, self.h, self.n // 2), B, C, self.chunk)
         else:
-            y = ssd_signed(xdt, decay(log_mag, gate, self.variant), B, C, self.chunk)
+            y = ssd_signed(xdt, a, B, C, self.chunk)
         y = (y + x * self.D[:, None]).reshape(b, l, -1)
         if self.out_norm is not None:
             return u + self.out_proj(self.out_norm(y, z))

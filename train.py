@@ -4,7 +4,7 @@ Example:
   python train.py --arch mamba2 --variant signed --seed 0
 Prints one JSON line with the config and accuracies (also appended to --out if given).
 """
-import argparse, json, time
+import argparse, json, os, time
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -54,6 +54,7 @@ def main(argv=None):
     ap.add_argument("--threads", type=int, default=1)
     ap.add_argument("--device", default="cpu", help="cpu, cuda or mps")
     ap.add_argument("--out", default=None, help="append the JSON result line to this file")
+    ap.add_argument("--save", default=None, help="save the trained model (config + weights) to this .pt file")
     args = ap.parse_args(argv)
 
     torch.set_num_threads(args.threads)
@@ -76,7 +77,11 @@ def main(argv=None):
     train_s = time.time() - t0
 
     acc = {int(L): evaluate(model, int(L), args.eval_n, args.eval_micro, dev) for L in args.eval_lens.split(",")}
-    res = {**{k: v for k, v in vars(args).items() if k not in ("out",)},
+    config = {k: v for k, v in vars(args).items() if k not in ("out", "save")}
+    if args.save:
+        os.makedirs(os.path.dirname(args.save) or ".", exist_ok=True)
+        torch.save({"config": config, "state_dict": model.state_dict(), "acc": acc}, args.save)
+    res = {**config,
            "params": sum(p.numel() for p in model.parameters()),
            "final_loss": round(loss.item(), 4), "train_s": round(train_s, 1),
            "total_s": round(time.time() - t0, 1), "acc": acc}
